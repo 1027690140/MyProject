@@ -30,12 +30,11 @@ type ConnectionPool struct {
 	adrr        string
 	newConnFunc func(string) (net.Conn, error)
 
-	connections []chan *poolConn     // 连接池 放poolConn
-	activeConns map[string]*poolConn // 当前活跃的连接，key是 不同的adrress，于activeMap相关联
-	idleConns   map[string]*poolConn // 当前空闲的连接
-	lastused    []time.Time          // 连接池最后使用时间，用于connections[]缩容
+	connections []chan *poolConn // 连接池 放poolConn
 
-	Reuse bool // // 如果 Reuse 为真且池处于 MaxActive 限制，则 Get() 重用 要返回的连接，如果 Reuse 为 false 并且池处于 MaxActive 限制， 创建一个一次性连接返回。
+	lastused []time.Time // 连接池最后使用时间，用于connections[]缩容
+
+	reuse bool // // 如果 reuse 为真且池处于 MaxActive 限制，则 Get() 重用 要返回的连接，如果 reuse 为 false 并且池处于 MaxActive 限制， 创建一个一次性连接返回。
 
 	minConns    int // 最小连接数
 	maxConns    int // 最大连接数
@@ -48,19 +47,16 @@ type ConnectionPool struct {
 	indexFreq         time.Duration // 获取index超时时间
 	connectionTimeout time.Duration // 连接超时时间
 	idleTimeout       time.Duration // 空闲连接超时时间
-	idleCheckFreq     time.Duration // 空闲连接检查频率
 	keepAliveInterval time.Duration // 保活检查时间
 	keepAliveStopChan chan struct{} //关闭keepalive
 
 	timerPool *sync.Pool // 池化保存 Timer
 
-	lock               sync.RWMutex   // 锁
-	expandingLock      sync.Mutex     // 扩容锁
-	shrinkingLock      sync.Mutex     // 缩容锁
-	idlecheckLock      sync.RWMutex   // 空闲连接检查锁
-	keepaliveLock      sync.RWMutex   // keepalive检查锁
-	stopWaitGroup      sync.WaitGroup // 关闭连接池等待组
-	keepAliveWaitGroup sync.WaitGroup // keepAlive等待组
+	lock          sync.RWMutex // 锁
+	expandingLock sync.Mutex   // 扩容锁
+	shrinkingLock sync.Mutex   // 缩容锁
+	idlecheckLock sync.RWMutex // 空闲连接检查锁
+	keepaliveLock sync.RWMutex // keepalive检查锁
 
 	closed     bool          // 是否关闭
 	poolClosed chan struct{} // 通知关闭
@@ -70,7 +66,7 @@ type ConnectionPool struct {
 func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *PoolOptions) (*ConnectionPool, error) {
 
 	if option == nil {
-		option = &DefaultPoolOptions
+		return nil, ErrPoolsOptionNotExist
 	}
 	if newConnFunc == nil {
 		return nil, ErrNewConnFunc
@@ -93,8 +89,6 @@ func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *
 		adrr:              option.adrr,
 		newConnFunc:       newConnFunc,
 		connections:       make([]chan *poolConn, option.poolNum),
-		activeConns:       make(map[string]*poolConn),
-		idleConns:         make(map[string]*poolConn),
 		lastused:          make([]time.Time, option.maxConns),
 		minConns:          option.minConns,
 		maxConns:          option.maxConns,
@@ -104,12 +98,10 @@ func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *
 		connectionTimeout: option.connectionTimeout,
 		indexFreq:         option.indexFreq,
 		idleTimeout:       option.idleTimeout,
-		idleCheckFreq:     option.idleCheckFreq,
-		keepAliveInterval: option.keepAliveInterval,
 		keepAliveStopChan: make(chan struct{}),
-		closed:            false,
-		timerPool:         timerPool,
-		Reuse:             option.Reuse,
+		poolClosed:        make(chan struct{}),
+		closed:            false, timerPool: timerPool,
+		reuse: option.reuse,
 	}
 
 	// 初始化连接池中的连接
@@ -120,16 +112,13 @@ func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *
 	// 检查连接是否超时
 	go p.KeepAliveCheck()
 
-	// 检查空闲连接
-	go p.checkIdleConns()
-
 	return p, nil
 }
 
 // KeepAliveCheck 检查连接是否超时
 func (p *ConnectionPool) KeepAliveCheck() {
 
-	ticker := time.NewTicker(p.idleCheckFreq)
+	ticker := time.NewTicker(p.keepAliveInterval)
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -145,15 +134,17 @@ func (p *ConnectionPool) KeepAliveCheck() {
 					return
 				}
 
+				// keepAlive等待组
+				keepAliveWaitGroup := sync.WaitGroup{}
 				poollen := len(p.connections)
-				p.keepAliveWaitGroup.Add(poollen)
+				keepAliveWaitGroup.Add(poollen)
 
 				for i := 0; i < poollen; i++ {
 
 					len := len(p.connections[i])
 
 					go func(len, i int) {
-						defer p.keepAliveWaitGroup.Done()
+						defer keepAliveWaitGroup.Done()
 						for j := 0; j < len; j++ {
 							conn := <-p.connections[i]
 							if err := p.keepAlive(conn); err != nil {
@@ -167,14 +158,7 @@ func (p *ConnectionPool) KeepAliveCheck() {
 										delete(p.activeConns, adrr)
 									}
 								}
-								// 连接表
-								p.connMap[adrr]--
-								v, ok = p.connMap[adrr]
-								if ok {
-									if v == 0 {
-										delete(p.connMap, adrr)
-									}
-								}
+
 								_ = conn.Close()
 								p.currConns--
 							} else {
@@ -188,7 +172,7 @@ func (p *ConnectionPool) KeepAliveCheck() {
 					}(len, i)
 				}
 
-				p.keepAliveWaitGroup.Wait()
+				keepAliveWaitGroup.Wait()
 
 				// 如果连接池中的连接数小于最小连接数，则扩容
 				poollen = len(p.connections)
@@ -231,7 +215,6 @@ func (p *ConnectionPool) createNewConn() error {
 		pool:         p,
 		lastUsedTime: time.Now(),
 	}
-	p.activeConns[conn.RemoteAddr().String()] = pc
 	p.currConns++
 
 	// 通过通道将连接添加到连接池中
@@ -303,7 +286,7 @@ func (p *ConnectionPool) Get() (net.Conn, error) {
 	// 如果没有空闲连接且已经达到最大连接数 连接池已满 ，则等待有连接可用或者超时
 
 	// 如果 不是是连接重用
-	if !p.Reuse {
+	if !p.reuse {
 		// 返回一次性连接
 		c, err := p.newConnFunc(p.adrr)
 		return p.wrapConn(c), err
@@ -320,7 +303,6 @@ func (p *ConnectionPool) Get() (net.Conn, error) {
 			p.currConns--
 			return nil, err
 		}
-		p.activeConns[conn.conn.RemoteAddr().String()] = conn
 		return conn.conn, nil
 	case <-timer.C:
 		return nil, ErrConnectionPoolTimeout
@@ -331,13 +313,12 @@ func (p *ConnectionPool) Get() (net.Conn, error) {
 func (p *ConnectionPool) checkConn(pc *poolConn) error {
 	if time.Since(pc.lastUsedTime) > p.idleTimeout {
 		p.lock.Lock()
-		delete(p.activeConns, pc.conn.RemoteAddr().String())
 		p.currConns--
 		p.lock.Unlock()
 		pc.conn.Close()
 		return ErrTimeout
 	}
-	time.AfterFunc(p.idleCheckFreq, func() {
+	time.AfterFunc(p.keepAliveInterval, func() {
 		p.checkConn(pc)
 	})
 	return nil
@@ -349,23 +330,14 @@ func (p *ConnectionPool) Put(conn net.Conn) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	if p.closed {
+		conn.Close()
 		return ErrConnectionPoolClosed
 	}
-
-	// 获取连接的远程地址
-	// addr := conn.RemoteAddr().String()
-	// poolConn, ok := p.activeConns[addr]
-	// if !ok {
-	// 	poolConn, ok = p.idleConns[addr]
-	// 	if !ok {
-	// 		return ErrConnNotInPool
-	// 	}
-	// }
 
 	//清空TCP连接的缓冲区而不关闭连接
 	err := conn.SetDeadline(time.Now())
 	if err != nil {
-		if p.Reuse {
+		if p.reuse {
 			conn.Close()
 			return nil
 		}
@@ -387,11 +359,6 @@ func (p *ConnectionPool) Put(conn net.Conn) error {
 		// 连接池已满，关闭连接
 		poolConn.conn.Close()
 
-		// 从连接池中移除连接
-		delete(p.activeConns, addr)
-		p.activeMap[addr]--
-		p.connMap[addr]--
-
 		// 当前连接数减1
 		p.currConns--
 
@@ -404,7 +371,7 @@ func (p *ConnectionPool) Put(conn net.Conn) error {
 
 // wrapConn 包装连接以实现 keep-alive
 func (p *ConnectionPool) wrapConn(conn net.Conn) net.Conn {
-	return &poolConn{conn: conn, pool: p}
+	return &poolConn{conn: conn, pool: p, lastUsedTime: time.Now()}
 }
 
 // expand 扩容连接池
@@ -483,30 +450,14 @@ func (p *ConnectionPool) shrink() error {
 
 				// 关闭
 				closeConn := p.connections[len(p.connections)-1]
-				close(closeConn)
 
-				for conn := range closeConn {
-					adrr := conn.RemoteAddr().String()
-					p.activeMap[adrr]--
-					v, ok := p.activeMap[adrr]
-					if ok {
-						if v < p.activeThreshold {
-							delete(p.activeMap, adrr)
-							delete(p.activeConns, adrr)
-						}
-					}
-					// 连接表
-					p.connMap[adrr]--
-					v, ok = p.connMap[adrr]
-					if ok {
-						if v == 0 {
-							delete(p.connMap, adrr)
-						}
-					}
+				for c := range closeConn {
+					conn := c
 					conn.Close()
 					p.currConns--
 				}
 
+				close(closeConn)
 				// 将连接池中的连接从切片中移除
 				p.connections = p.connections[len(p.connections):]
 			}
@@ -520,14 +471,17 @@ func (p *ConnectionPool) shrink() error {
 func (p *ConnectionPool) ClosePool() {
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	p.stopWaitGroup.Add(len(p.connections))
+	// 关闭连接池等待组
+	stopWaitGroup := sync.WaitGroup{}
+
+	stopWaitGroup.Add(len(p.connections))
 
 	// 关闭所有连接通道
 	for i := 0; i < len(p.connections); i++ {
 		// 回收连接池中所有连接
 		connCh := p.connections[i]
 		go func() {
-			defer p.stopWaitGroup.Done()
+			defer stopWaitGroup.Done()
 			for len(connCh) > 0 {
 				conn := <-connCh
 				_ = conn.Close()
@@ -536,7 +490,7 @@ func (p *ConnectionPool) ClosePool() {
 			close(connCh)
 		}()
 	}
-	p.stopWaitGroup.Wait()
+	stopWaitGroup.Wait()
 
 	// 关闭保活协程
 	close(p.keepAliveStopChan)
@@ -551,7 +505,6 @@ func (p *ConnectionPool) keepAlive(conn net.Conn) error {
 	if time.Now().Sub(conn.(*poolConn).lastUsedTime) > p.idleTimeout {
 		_ = conn.Close()
 		p.currConns--
-		adrr := conn.RemoteAddr().String()
 		//有空余容量
 		if p.currConns < p.maxConns {
 			newConn, err := p.newConnFunc(p.adrr)
@@ -561,7 +514,6 @@ func (p *ConnectionPool) keepAlive(conn net.Conn) error {
 			pc := &poolConn{conn: newConn, pool: p, lastUsedTime: time.Now()}
 			index := p.index()
 			p.connections[index] <- pc
-			p.idleConns[adrr] = pc
 			// 更新时间
 			p.lastused[index] = time.Now()
 			p.currConns++
@@ -589,12 +541,7 @@ func (p *ConnectionPool) releaseConn(conn net.Conn) error {
 	}
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	_, ok := p.activeConns[conn.RemoteAddr().String()]
-	if !ok {
-		// 如果连接不在活跃连接中，则直接关闭连接
-		conn.Close()
-		return nil
-	}
+
 	index := p.index()
 
 	// 检查连接池是否已满
@@ -605,69 +552,8 @@ func (p *ConnectionPool) releaseConn(conn net.Conn) error {
 		return nil
 	// 如果连接池已满，则关闭连接
 	default:
-		delete(p.activeConns, conn.RemoteAddr().String())
 		// 连接数减一
 		p.currConns--
 		return conn.Close()
-	}
-}
-
-// popActiveConn弹出一个空闲连接，如果没有空闲连接则返回
-func (p *ConnectionPool) popActiveConn() *poolConn {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-
-	//如果给定adrr 遍历对应的conn
-	// for _, conn := range p.connMap[adrress]
-
-	for _, conn := range p.activeConns {
-		if err := p.keepAlive(conn); err != nil {
-			adrr := conn.RemoteAddr().String()
-			// 如果连接超时，且小于阈值，则从活跃连接池中删除
-			p.activeMap[adrr]--
-			v, ok := p.activeMap[adrr]
-			if ok {
-				if v < p.activeThreshold {
-					delete(p.activeMap, adrr)
-					delete(p.activeConns, adrr)
-				}
-			}
-			// 连接表
-			p.connMap[adrr]--
-			v, ok = p.connMap[adrr]
-			if ok {
-				if v == 0 {
-					delete(p.connMap, adrr)
-				}
-			}
-			_ = conn.Close()
-			p.currConns--
-			continue
-		}
-		return conn
-	}
-	return nil
-}
-
-// 限制最大空闲连接数
-func (p *ConnectionPool) checkIdleConns() {
-	ticker := time.NewTicker(p.idleCheckFreq)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			p.idlecheckLock.Lock()
-			if len(p.idleConns) > p.maxIdle {
-				// 也可以改 p.activeConns 所以连接放在 p.activeConns 里 ，不用p.idleConns
-				numConnsToClose := len(p.idleConns) - p.maxIdle
-				for i := 0; i < numConnsToClose; i++ {
-					for _, conn := range p.idleConns {
-						p.releaseConn(conn)
-					}
-				}
-			}
-			p.idlecheckLock.Unlock()
-		}
 	}
 }

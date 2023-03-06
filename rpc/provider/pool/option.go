@@ -38,10 +38,9 @@ type PoolOptions struct {
 	indexFreq         time.Duration // 获取index超时时间
 	connectionTimeout time.Duration // 连接超时时间
 	idleTimeout       time.Duration // 空闲连接超时时间
-	idleCheckFreq     time.Duration // 空闲连接检查频率
 	keepAliveInterval time.Duration // 保活检查时间
 
-	Reuse bool
+	reuse bool
 }
 
 // DefaultPoolOptions sets a list of recommended options for good performance.
@@ -53,7 +52,6 @@ var DefaultPoolOptions = PoolOptions{
 	shrinknum:         20,
 	connectionTimeout: 30 * time.Second, // 连接超时时间
 	idleTimeout:       30 * time.Second, // 空闲连接超时时间
-	idleCheckFreq:     30 * time.Second, // 空闲连接检查频率
 	keepAliveInterval: 30 * time.Second, // 保活检查时间
-	Reuse:             true,
+	reuse:             true,
 }
