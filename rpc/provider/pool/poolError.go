@@ -9,7 +9,7 @@ type ErrPool error
 var (
 	ErrTimeout                ErrPool = errors.New("Err Timeout")
 	ErrPoolClosed             ErrPool = errors.New("Err Pool Closed")
-	ErrConnectionPoolTimeout  ErrPool = errors.New("Err ConnectionPool Timeout")
+	ErrGetConnectionTimeout   ErrPool = errors.New("Err Get Connection Timeout")
 	ErrMaxConnsReached        ErrPool = errors.New("Err Max Conns Reached")
 	ErrMaxConnsParameter      ErrPool = errors.New("invalid maxConns parameter")
 	ErrClosedConnectionPool   ErrPool = errors.New("Err Closed ConnectionPool")
@@ -21,4 +21,6 @@ var (
 	ErrPoolNotExist           ErrPool = errors.New("pool not exist")
 	ErrPoolsParameterNotExist ErrPool = errors.New("new Pools Parameter Not Exist")
 	ErrPoolsOptionNotExist    ErrPool = errors.New("new Pools Option Not Exist")
+	ErrPoolEmpty              ErrPool = errors.New("new Pools Empty  ")
+	ErrPoolFull               ErrPool = errors.New("new Pools Full   ")
 )

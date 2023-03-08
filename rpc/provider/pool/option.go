@@ -55,3 +55,12 @@ var DefaultPoolOptions = PoolOptions{
 	keepAliveInterval: 30 * time.Second, // 保活检查时间
 	reuse:             true,
 }
+
+type PoolsParameter struct {
+	activeThreshold   int //活跃阈值 超过该值就是活跃的连接
+	maxActiveConnsNum int //最大空闲连接数
+	maxIdleConnsNum   int //最大活跃连接数
+
+	idleCheckFreq     time.Duration // 空闲连接检查频率
+	keepAliveInterval time.Duration // 保活检查时间
+}
