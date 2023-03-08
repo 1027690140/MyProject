@@ -56,6 +56,6 @@ func (server debugHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	})
 	err := debug.Execute(w, services)
 	if err != nil {
-		_, _ = fmt.Fprintln(w, "rpc: error executing template:", err.Error())
+		_, _ = fmt.Fprintln(w, " rpc: error executing template:", err.Error())
 	}
 }
