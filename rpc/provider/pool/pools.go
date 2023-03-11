@@ -2,12 +2,23 @@ package pool
 
 import (
 	"net"
+	"runtime"
 	"sync"
 	"time"
 )
 
+// chan to stop
+type poolStoper struct {
+	checkIdleStopChan chan struct{} //关闭checkIdle
+	retryNewStopChan  chan struct{} //关闭retry
+	retryDelStopChan  chan struct{} //关闭retry
+	retryPutStopChan  chan struct{} //关闭retry
+	poolClosedChan    chan struct{} //通知关闭
+}
+
 // 全局pool 管理不同adrr 的pool  对所有的空闲、活跃连接进行管理
 type Pools struct {
+	poolStoper // chan to stop
 
 	// 下面的连接数 指的是adrr种类数 类似set
 	curActiveConnsNum int //当前活跃连接数
@@ -16,7 +27,6 @@ type Pools struct {
 	maxIdleConnsNum   int //最大活跃连接数
 
 	connPools map[string]*ConnectionPool //不同adrr对应的连接池
-	poolMap   sync.Map                   //存储 connPools 的 key
 
 	activeThreshold int // 活跃阈值 超过该值就是活跃的连接
 
@@ -25,16 +35,10 @@ type Pools struct {
 	idleConnsNum   map[string]int // 活跃连接 统计活跃连接以及对应的连接数
 	lastUsedTime   map[string]time.Time
 
-	idlecheckLock sync.RWMutex  // 空闲连接检查锁
 	idleCheckFreq time.Duration // 空闲连接检查频率
 
-	checkIdleStopChan chan struct{} //关闭checkIdle
-	retryNewStopChan  chan struct{} //关闭retry
-	retryDelStopChan  chan struct{} //关闭retry
-	retryPutStopChan  chan struct{} //关闭retry
-
-	poolClosedChan chan struct{} //通知关闭
-	closeLock      sync.RWMutex  // 关闭锁
+	idlecheckLock sync.RWMutex // 空闲连接检查锁
+	closeLock     sync.RWMutex // 关闭锁
 
 	retryNewList chan *PoolOptions    // 重试新建队列
 	retryDelList chan *ConnectionPool // 重试删除队列
@@ -50,7 +54,13 @@ func NewPools(opts []*PoolOptions, option *PoolsParameter) (*Pools, error) {
 	}
 
 	pool := &Pools{
-		poolMap:           sync.Map{},
+		poolStoper: poolStoper{
+			retryNewStopChan:  make(chan struct{}),
+			retryDelStopChan:  make(chan struct{}),
+			retryPutStopChan:  make(chan struct{}),
+			checkIdleStopChan: make(chan struct{}),
+			poolClosedChan:    make(chan struct{}),
+		},
 		connPools:         make(map[string]*ConnectionPool),
 		activeConnsNum:    make(map[string]int),
 		idleConnsNum:      make(map[string]int),
@@ -58,8 +68,6 @@ func NewPools(opts []*PoolOptions, option *PoolsParameter) (*Pools, error) {
 		retryNewList:      make(chan *PoolOptions, 100),
 		retryDelList:      make(chan *ConnectionPool, 100),
 		retryPutList:      make(chan []interface{}, 100),
-		retryNewStopChan:  make(chan struct{}),
-		retryDelStopChan:  make(chan struct{}),
 		idleCheckFreq:     option.idleCheckFreq,
 		activeThreshold:   option.activeThreshold,
 		maxActiveConnsNum: option.maxActiveConnsNum,
@@ -172,12 +180,17 @@ func (p *Pools) PutConn(conn net.Conn) {
 		return
 	}
 	err := p.connPools[adrr].Put(conn)
+	//不管成功与否，更新时间
+	p.lastUsedTime[adrr] = time.Now()
+
 	if err != ErrPoolFull {
-		//如果是空闲连接，池漫直接关闭
+
+		//如果是空闲连接，池满直接关闭
 		if _, ok := p.idleConnsNum[adrr]; ok {
 			p.idleConnsNum[adrr]--
 			conn.Close()
 		}
+
 		// 如果是活跃连接，放入异步队列
 		// 如果连接已经超时，则关闭连接并尝试重新建立连接
 		pc := p.connPools[conn.RemoteAddr().String()]
@@ -211,14 +224,17 @@ func (p *Pools) Close() error {
 	for k, v := range p.connPools {
 		go func(k string, v *ConnectionPool) {
 			defer closeWaitGroup.Done()
+
 			err := p.connPools[k].ClosePool()
-			if err != nil {
+			if err != nil || p.connPools[k].closed != true {
 				// 删除失败,加入重试队列  不能放adrr  要直接放 *ConnectionPool
 				p.retryDelList <- v
 			} else {
+				// 删除成功
 				delete(p.connPools, k)
+				// SetFinalizer
+				runtime.SetFinalizer(p.connPools[k], p.connPools[k].Finalizer)
 			}
-
 		}(k, v)
 	}
 
@@ -234,6 +250,8 @@ func (p *Pools) Close() error {
 	p.activeConnsNum = nil
 	p.activeConnsNum = nil
 	p.connPools = nil
+
+	runtime.GC()
 
 	return nil
 }
@@ -452,15 +470,15 @@ func (p *Pools) retryPut() {
 					//判断此时是否为空闲连接
 					if p.connPools[adrr].currConns < p.activeThreshold {
 						delete(p.activeConnsNum, adrr)
+					} else {
+						p.activeConnsNum[adrr]--
 					}
 					return
 				}
-				p.lastUsedTime[adrr] = time.Now()
 			}(rp[0].(*Pools), rp[1].(net.Conn))
 		case <-p.retryPutStopChan:
 			close(p.retryPutList)
 			return
-
 		}
 	}
 }

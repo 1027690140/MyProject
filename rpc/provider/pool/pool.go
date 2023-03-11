@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 	"sync"
@@ -15,17 +16,30 @@ import (
 // TODO 多address conn
 // TODO 活跃空闲 conn 管理
 
-// poolCheck 存放连接检查信息
-type poolCheck struct {
+// poolChecker 存放连接检查信息
+type poolChecker struct {
 	indexFreq         time.Duration // 获取index超时时间
 	connectionTimeout time.Duration // 连接超时时间
 	idleTimeout       time.Duration // 空闲连接超时时间
 	idleCheckFreq     time.Duration // 空闲连接检查频率
 	keepAliveInterval time.Duration // 保活检查时间
+	keepAliveStopChan chan struct{} //关闭keepalive
+	keepAliveChan     chan struct{} //通知keepalive
+}
+
+// 锁
+type poolLocker struct {
+	lock          sync.RWMutex // 锁
+	expandingLock sync.Mutex   // 扩容锁
+	shrinkingLock sync.Mutex   // 缩容锁
+	idlecheckLock sync.RWMutex // idlecheckLock锁
+	keepaliveLock sync.RWMutex // keepalive检查锁
 }
 
 // ConnectionPool 某个adrr的连接池
 type ConnectionPool struct {
+	poolLocker // 锁
+	poolChecker
 	adrr        string
 	newConnFunc func(string) (net.Conn, error)
 
@@ -44,20 +58,7 @@ type ConnectionPool struct {
 	shrinkNum   int // 缩容数目
 	connChanNum int //  []chan *poolConn 中每个chan大小
 
-	indexFreq         time.Duration // 获取index超时时间
-	connectionTimeout time.Duration // 连接超时时间
-	idleTimeout       time.Duration // 空闲连接超时时间
-	keepAliveInterval time.Duration // 保活检查时间
-	keepAliveStopChan chan struct{} //关闭keepalive
-	keepAliveChan     chan struct{} //通知keepalive
-
 	timerPool *sync.Pool // 池化保存 Timer
-
-	lock          sync.RWMutex // 锁
-	expandingLock sync.Mutex   // 扩容锁
-	shrinkingLock sync.Mutex   // 缩容锁
-	idlecheckLock sync.RWMutex // idlecheckLock锁
-	keepaliveLock sync.RWMutex // keepalive检查锁
 
 	closed     bool          // 是否关闭
 	poolClosed chan struct{} // 通知关闭
@@ -88,22 +89,27 @@ func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *
 	}
 
 	p := &ConnectionPool{
-		adrr:              option.adrr,
-		newConnFunc:       newConnFunc,
-		connections:       make([]chan *poolConn, option.poolNum),
-		lastused:          make([]time.Time, option.maxConns),
-		minConns:          option.minConns,
-		maxConns:          option.maxConns,
-		currConns:         0,
-		poolNum:           option.poolNum,
-		connChanNum:       option.maxConns / option.poolNum,
-		connectionTimeout: option.connectionTimeout,
-		indexFreq:         option.indexFreq,
-		idleTimeout:       option.idleTimeout,
-		keepAliveStopChan: make(chan struct{}),
-		poolClosed:        make(chan struct{}),
-		keepAliveChan:     make(chan struct{}, option.poolNum),
-		closed:            false, timerPool: timerPool,
+		poolLocker: poolLocker{},
+		poolChecker: poolChecker{
+			connectionTimeout: option.connectionTimeout,
+			indexFreq:         option.indexFreq,
+			idleTimeout:       option.idleTimeout,
+			idleCheckFreq:     option.idleCheckFreq,
+			keepAliveInterval: option.keepAliveInterval,
+			keepAliveStopChan: make(chan struct{}),
+			keepAliveChan:     make(chan struct{}, option.poolNum),
+		},
+		adrr:        option.adrr,
+		newConnFunc: newConnFunc,
+		connections: make([]chan *poolConn, option.poolNum),
+		lastused:    make([]time.Time, option.maxConns),
+		minConns:    option.minConns,
+		maxConns:    option.maxConns,
+		currConns:   0,
+		poolNum:     option.poolNum,
+		connChanNum: option.maxConns / option.poolNum,
+		poolClosed:  make(chan struct{}),
+		closed:      false, timerPool: timerPool,
 		reuse:             option.reuse,
 		roundRobinCounter: 0,
 	}
@@ -588,6 +594,11 @@ func (p *ConnectionPool) ClosePool() error {
 
 	return nil
 
+}
+
+// Finalizer  GC
+func (p *ConnectionPool) Finalizer() {
+	log.Printf("ConnectionPool %s is closed", p.adrr)
 }
 
 // keepAlive  检查连接是否超时，如果超时则尝试重新建立连接

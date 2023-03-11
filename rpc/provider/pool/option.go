@@ -36,6 +36,7 @@ type PoolOptions struct {
 	shrinknum int // 缩容数目
 
 	indexFreq         time.Duration // 获取index超时时间
+	idleCheckFreq     time.Duration // 空闲连接检查频率
 	connectionTimeout time.Duration // 连接超时时间
 	idleTimeout       time.Duration // 空闲连接超时时间
 	keepAliveInterval time.Duration // 保活检查时间
