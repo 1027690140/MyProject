@@ -231,9 +231,11 @@ func (p *Pools) Close() error {
 				p.retryDelList <- v
 			} else {
 				// 删除成功
-				delete(p.connPools, k)
+
 				// SetFinalizer
 				runtime.SetFinalizer(p.connPools[k], p.connPools[k].Finalizer)
+
+				delete(p.connPools, k)
 			}
 		}(k, v)
 	}
