@@ -65,3 +65,12 @@ type PoolsParameter struct {
 	idleCheckFreq     time.Duration // 空闲连接检查频率
 	keepAliveInterval time.Duration // 保活检查时间
 }
+
+var DefaultParameter = &PoolsParameter{
+	activeThreshold:   5,
+	maxActiveConnsNum: 50,
+	maxIdleConnsNum:   20,
+
+	idleCheckFreq:     30 * time.Second, // 空闲连接检查频率
+	keepAliveInterval: 30 * time.Second, // 保活检查时间
+}

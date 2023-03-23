@@ -3,6 +3,7 @@ package pool
 import (
 	"net"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 )
@@ -48,9 +49,12 @@ type Pools struct {
 }
 
 // NewPools return pools
-func NewPools(opts []*PoolOptions, option *PoolsParameter) (*Pools, error) {
+func NewPools(option *PoolsParameter, opts ...*PoolOptions) (*Pools, error) {
 	if len(opts) == 0 {
 		return nil, ErrPoolsParameterNotExist
+	}
+	if option == nil {
+		option = DefaultParameter
 	}
 
 	pool := &Pools{
@@ -234,9 +238,10 @@ func (p *Pools) Close() error {
 
 				// SetFinalizer
 				runtime.SetFinalizer(p.connPools[k], p.connPools[k].Finalizer)
-
-				delete(p.connPools, k)
 			}
+			// 无论如何都delete
+			delete(p.connPools, k)
+
 		}(k, v)
 	}
 
@@ -378,17 +383,54 @@ func (p *Pools) idlecheck() {
 
 }
 
+func (p *Pools) sortTime(mod int, sortedTimeNew []interface{}) {
+	if mod >= 0 {
+		//  对lastusedtime排序，再对使用频率靠前的expand   靠后的shrink
+		sortedTimeNew := make([]interface{}, len(p.lastUsedTime)/2)
+
+		for k, v := range p.lastUsedTime {
+			//对活跃连接排序  用于expan
+			if _, ok := p.activeConnsNum[k]; ok {
+				sortedTimeNew = append(sortedTimeNew, [2]interface{}{v, k})
+			}
+		}
+		// 对 sortedTimeNew 按时间从新到旧排序
+		sort.Slice(sortedTimeNew, func(i, j int) bool {
+			return sortedTimeNew[i].([2]interface{})[0].(time.Time).After(sortedTimeNew[j].([2]interface{})[0].(time.Time))
+		})
+	} else {
+		//  对lastusedtime排序，再对使用频率靠前的expand   靠后的shrink
+		sortedTimeOld := make([]interface{}, len(p.lastUsedTime)/2)
+
+		for k, v := range p.lastUsedTime {
+			//对不活跃连接排序  用于shrink
+			if _, ok := p.idleConnsNum[k]; ok {
+				sortedTimeOld = append(sortedTimeOld, [2]interface{}{v, k})
+			}
+		}
+		// 对sortedTimeOld 按时间从旧到新排序
+		sort.Slice(sortedTimeOld, func(i, j int) bool {
+			return sortedTimeOld[i].([2]interface{})[0].(time.Time).Before(sortedTimeOld[j].([2]interface{})[0].(time.Time))
+		})
+	}
+
+}
+
 // 限制最连接数
 func (p *Pools) checkConns(mod int) {
-	// TODO 对lastusedtime排序，再对使用频率靠前的expand   靠后的shrink
+	//对lastusedtime排序，再对使用频率靠前的expand   靠后的shrink
+	sortedTime := make([]interface{}, len(p.lastUsedTime)/2)
 
 	if mod >= 0 {
-		//扩容
-		for k := range p.activeConnsNum {
+		//expand
+
+		p.sortTime(mod, sortedTime)
+		for i := 0; i <= p.maxActiveConnsNum-len(p.activeConnsNum); i++ {
+			k := sortedTime[i].([2]interface{})[1].(string)
 			go func(addr string, cp *ConnectionPool) {
 				if cp.currConns <= cp.shrinkNum {
 					go cp.expand()
-					// 不要等待返回结果，虽然有误差，但是快一些，等下次idlecheck值会最终正确
+					// 不要等待返回结果，虽然有误差，但是快一些，等 idlecheck值 最终正确
 					p.activeConnsNum[addr] = cp.maxConns - cp.shrinkNum/cp.poolNum
 				}
 
@@ -397,11 +439,15 @@ func (p *Pools) checkConns(mod int) {
 
 	} else {
 		//shrink
-		for k := range p.idleConnsNum {
+
+		p.sortTime(mod, sortedTime)
+
+		for i := 0; i <= p.maxIdleConnsNum-len(p.idleConnsNum); i++ {
+			k := sortedTime[i].([2]interface{})[1].(string)
 			go func(addr string, cp *ConnectionPool) {
 				if cp.currConns > cp.shrinkNum {
 					go cp.shrink()
-					// 不要等待返回结果，虽然有误差，但是快一些，等下次idlecheck值会最终正确
+					// 不要等待返回结果，虽然有误差，但是快一些，等 idlecheck值 最终正确
 					p.idleConnsNum[addr] = cp.shrinkNum
 				}
 			}(k, p.connPools[k])
