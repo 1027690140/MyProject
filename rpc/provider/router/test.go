@@ -13,5 +13,4 @@ package router
 // 	if v3.prefix != "/v1/v2/v3" {
 // 		t.Fatal("v2 prefix should be /v1/v2")
 // 	}
-
 // }

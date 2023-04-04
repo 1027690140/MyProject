@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"rpc_service/dispatcher/loadbalance"
 )
-  
+
 func lbtest() {
 	randomLb := loadbalance.LoadBalanceFactory(loadbalance.Random)
 	randomLb.Add("127.0.0.1:1001")

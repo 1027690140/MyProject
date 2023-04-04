@@ -36,11 +36,11 @@ type poolLocker struct {
 	keepaliveLock sync.RWMutex // keepalive检查锁
 }
 
-// ConnectionPool 某个adrr的连接池
+// ConnectionPool 某个addr的连接池
 type ConnectionPool struct {
 	poolLocker // 锁
 	poolChecker
-	adrr        string
+	addr        string
 	newConnFunc func(string) (net.Conn, error)
 
 	connections []chan *poolConn // 连接池 放poolConn
@@ -73,7 +73,7 @@ func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *
 	if newConnFunc == nil {
 		return nil, ErrNewConnFunc
 	}
-	if option.adrr == "" {
+	if option.addr == "" {
 		return nil, ErrAddress
 	}
 	if option.maxIdle <= 0 || option.maxConns <= 0 || option.minConns > option.maxConns {
@@ -99,7 +99,7 @@ func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *
 			keepAliveStopChan: make(chan struct{}),
 			keepAliveChan:     make(chan struct{}, option.poolNum),
 		},
-		adrr:        option.adrr,
+		addr:        option.addr,
 		newConnFunc: newConnFunc,
 		connections: make([]chan *poolConn, option.poolNum),
 		lastused:    make([]time.Time, option.maxConns),
@@ -203,7 +203,7 @@ func (p *ConnectionPool) createNewConn() error {
 	}
 
 	// 创建新连接
-	conn, err := p.newConnFunc(p.adrr)
+	conn, err := p.newConnFunc(p.addr)
 	if err != nil {
 		fmt.Println("Failed to create new connection:", err)
 		return err
@@ -360,7 +360,7 @@ func (p *ConnectionPool) Get() (net.Conn, error) {
 		// 如果 不是是连接重用
 		if !p.reuse {
 			// 返回一次性连接
-			c, err := p.newConnFunc(p.adrr)
+			c, err := p.newConnFunc(p.addr)
 			go p.expand()
 			return c, err
 
@@ -386,7 +386,7 @@ func (p *ConnectionPool) Get() (net.Conn, error) {
 		if err := p.checkConn(conn); err != nil {
 			conn.Close()
 			p.currConns--
-			c, _ := p.newConnFunc(p.adrr)
+			c, _ := p.newConnFunc(p.addr)
 			//close 了一个，总数不变
 			return c, err
 		}
@@ -432,7 +432,7 @@ func (p *ConnectionPool) Put(conn net.Conn) error {
 			conn.Close()
 			return nil
 		}
-		conn, _ = p.newConnFunc(p.adrr)
+		conn, _ = p.newConnFunc(p.addr)
 	}
 	poolConn := &poolConn{conn: conn, pool: p, lastUsedTime: time.Now()}
 
@@ -498,7 +498,7 @@ func (p *ConnectionPool) expand() error {
 		connChan := make(chan *poolConn, p.connChanNum)
 		p.connections = append(p.connections, connChan)
 
-		conn, err := p.newConnFunc(p.adrr)
+		conn, err := p.newConnFunc(p.addr)
 		if err != nil {
 			// 扩容失败，需要回收已经申请到的连接
 			for j := 0; j < i; j++ {
@@ -598,7 +598,7 @@ func (p *ConnectionPool) ClosePool() error {
 
 // Finalizer  GC
 func (p *ConnectionPool) Finalizer() {
-	log.Printf("ConnectionPool %s is closed", p.adrr)
+	log.Printf("ConnectionPool %s is closed", p.addr)
 }
 
 // keepAlive  检查连接是否超时，如果超时则尝试重新建立连接
@@ -609,7 +609,7 @@ func (p *ConnectionPool) keepAlive(conn net.Conn) error {
 		p.currConns--
 		//有空余容量
 		if p.currConns < p.maxConns {
-			newConn, err := p.newConnFunc(p.adrr)
+			newConn, err := p.newConnFunc(p.addr)
 			if err != nil {
 				return err
 			}

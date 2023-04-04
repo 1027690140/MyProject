@@ -26,7 +26,7 @@ const (
 
 // PoolOptions are params for creating grpc connect pool.
 type PoolOptions struct {
-	adrr        string
+	addr        string
 	newConnFunc func(string) (net.Conn, error)
 
 	minConns  int // 最小连接数

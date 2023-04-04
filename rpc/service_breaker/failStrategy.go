@@ -1,9 +1,8 @@
-package consumer
+package serviceBreaker
 
 import (
 	"context"
 	queue "rpc_service/util"
-	"sync"
 	"sync/atomic"
 )
 
@@ -17,36 +16,28 @@ const (
 	Failsafe                  //失败安全		应用场景，可以用于写入审计日志等操作。
 )
 
-// FailBackPamars   失败自动恢复 策略需要的参数
+// Failback   失败自动恢复 策略需要的参数
 type FailBackPamars struct {
-	id int
-
-	cp *RPCClientProxy
-
+	id      int
+	breaker *ServiceBreaker
 	//func Call() pamars
 	ctx            context.Context
-	service        *Service
+	exec           func() (interface{}, error)
 	stub           interface{}
 	params         []interface{}
 	failBackFail   chan error       // 异步执行成功,存放结果
-	failBackID     chan int         // 任务ID
+	failBackId     chan int         // 任务ID
 	failBackSucess chan interface{} // 异步执行失败
 	isTimeOut      bool             // 判断任务是否超时
 }
 
-// NewFailBackPamars 保存参数
-func NewFailBackPamars(ctx context.Context, cp *RPCClientProxy, id int, service *Service, stub interface{}, params ...interface{}) *FailBackPamars {
+// 保存参数
+func NewFailBackPamars(id int, ctx context.Context, breaker *ServiceBreaker, exec func() (interface{}, error)) *FailBackPamars {
 	return &FailBackPamars{
-		id:             id,
-		cp:             cp,
-		ctx:            ctx,
-		service:        service,
-		stub:           stub,
-		params:         params,
-		failBackFail:   make(chan error, 1),
-		failBackID:     make(chan int, 1),
-		failBackSucess: make(chan interface{}, 1),
-		isTimeOut:      false,
+		exec:    exec,
+		breaker: breaker,
+		id:      id,
+		ctx:     ctx,
 	}
 }
 
@@ -57,7 +48,6 @@ var gobalfailList *failList
 type failList struct {
 	list *queue.Queue
 	size int32
-	lock sync.RWMutex
 }
 
 func init() {
@@ -67,13 +57,11 @@ func init() {
 	}
 }
 
-// SyncFailBcak 异步执行失败队列    Failback  策略
+// 异步执行失败队列    Failback  策略
 func SyncFailBcak(list *failList) {
-	list.lock.RLock()
 	que := list.list.Remove().(*queue.Queue)
 	atomic.AddInt32(&list.size, -1) //大小减小
 	len := que.Length()
-	list.lock.RUnlock()
 	for i := 0; i < len; i++ {
 		q, ok := que.Remove().(*FailBackPamars)
 		if !ok {
@@ -85,10 +73,10 @@ func SyncFailBcak(list *failList) {
 		}
 
 		go func() {
-			res, err := q.cp.client.Invoke(q.ctx, q.service, q.stub, q.params...)
+			res, err := q.breaker.Call(q.ctx, q.exec)
 			if err == nil {
 				// 返回id
-				q.failBackID <- q.id
+				q.failBackId <- q.id
 				// 返回结果
 				q.failBackSucess <- res
 			}

@@ -159,7 +159,7 @@ func (cp *RPCClientProxy) Call(ctx context.Context, servicePath string, stub int
 			// 生产全局ID
 			id := uid.GenerateSnowflakeID()
 			// 生成参数
-			failPamars := NewFailBackPamars(cp, id, ctx, service, stub, params...)
+			failPamars := NewFailBackPamars(ctx, cp, id, service, stub, params...)
 			// 加入失败队列
 			if atomic.LoadInt32(&gobalfailList.size) == 0 { //队列为空
 				q := queue.NewQueue()
@@ -181,7 +181,7 @@ func (cp *RPCClientProxy) Call(ctx context.Context, servicePath string, stub int
 
 			//异步执行成功
 			case rs := <-failPamars.failBackSucess:
-				idd := <-failPamars.failBackId
+				idd := <-failPamars.failBackID
 				if failPamars.id == idd { //确保id对应
 					return rs, nil
 				}

@@ -38,7 +38,7 @@ func (server *RPCServer) readRequestHeader(cc *codec.GobCodec) (*msg.RPCMsg, err
 	var h = msg.NewRPCMsg()
 	if err := cc.ReadHeader(h); err != nil {
 		if err != io.EOF && err != io.ErrUnexpectedEOF {
-			log.Println("rpc server: read header error :", err)
+			log.Println("rpc server: read header error:", err)
 		}
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (server *RPCServer) readRequestHeader(cc *codec.GobCodec) (*msg.RPCMsg, err
 func (server *RPCServer) findService(serviceMethod string) (svc *service, mtype *methodType, err error) {
 	dot := strings.LastIndex(serviceMethod, ".")
 	if dot < 0 {
-		err = errors.New("rpc server: service/method  request -formed:  " + serviceMethod)
+		err = errors.New("rpc server: service/method request ill-formed: " + serviceMethod)
 		return
 	}
 	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
@@ -61,7 +61,7 @@ func (server *RPCServer) findService(serviceMethod string) (svc *service, mtype 
 	svc = svci.(*service)
 	mtype = svc.method[methodName]
 	if mtype == nil {
-		err = errors.New("rpc server: can't find method  " + methodName)
+		err = errors.New("rpc server: can't find method " + methodName)
 	}
 	return
 }

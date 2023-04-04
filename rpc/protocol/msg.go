@@ -14,12 +14,12 @@ const (
 
 // RPCMsg is  message format for rpc
 type RPCMsg struct {
-	*Header
-	Error         error
-	ServiceClass  string
-	ServiceMethod string
-	Payload       []byte
-	Metadata      map[string]string
+	*Header                         // 指针类型，占用 Header 的空间
+	Error         error             // 错误信息
+	ServiceClass  string            // 服务类名
+	ServiceMethod string            // 服务方法名
+	Payload       []byte            // 请求/响应的数据
+	Metadata      map[string]string // 元数据
 }
 
 func NewRPCMsg() *RPCMsg {

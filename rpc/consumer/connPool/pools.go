@@ -15,19 +15,20 @@ type poolStoper struct {
 	retryDelStopChan  chan struct{} //关闭retry
 	retryPutStopChan  chan struct{} //关闭retry
 	poolClosedChan    chan struct{} //通知关闭
+
 }
 
-// 全局pool 管理不同adrr 的pool  对所有的空闲、活跃连接进行管理
+// 全局pool 管理不同addr 的pool  对所有的空闲、活跃连接进行管理
 type Pools struct {
-	poolStoper // chan to stop
-
-	// 下面的连接数 指的是adrr种类数 类似set
+	poolStoper      // chan to stop
+	LRU        *LRU // lru
+	// 下面的连接数 指的是addr种类数 类似set
 	curActiveConnsNum int //当前活跃连接数
 	curIdleConnsNum   int //当前空闲连接数  ： 即使用频率低于activeThreshold的连接
 	maxActiveConnsNum int //最大空闲连接数
 	maxIdleConnsNum   int //最大活跃连接数
 
-	connPools map[string]*ConnectionPool //不同adrr对应的连接池
+	connPools map[string]*ConnectionPool //不同addr对应的连接池
 
 	activeThreshold int // 活跃阈值 超过该值就是活跃的连接
 
@@ -35,8 +36,7 @@ type Pools struct {
 	activeConnsNum map[string]int // 活跃连接 统计活跃连接以及对应的连接数
 	idleConnsNum   map[string]int // 活跃连接 统计活跃连接以及对应的连接数
 	lastUsedTime   map[string]time.Time
-
-	idleCheckFreq time.Duration // 空闲连接检查频率
+	idleCheckFreq  time.Duration // 空闲连接检查频率
 
 	idlecheckLock sync.RWMutex // 空闲连接检查锁
 	closeLock     sync.RWMutex // 关闭锁
@@ -65,6 +65,7 @@ func NewPools(option *PoolsParameter, opts ...*PoolOptions) (*Pools, error) {
 			checkIdleStopChan: make(chan struct{}),
 			poolClosedChan:    make(chan struct{}),
 		},
+		LRU:               NewLRU(999999999, option.idleCheckFreq),
 		connPools:         make(map[string]*ConnectionPool),
 		activeConnsNum:    make(map[string]int),
 		idleConnsNum:      make(map[string]int),
@@ -80,6 +81,7 @@ func NewPools(option *PoolsParameter, opts ...*PoolOptions) (*Pools, error) {
 		curIdleConnsNum:   0,
 	}
 	lens := len(opts)
+	// 初始化
 	for i := 0; i < lens; i++ {
 		go func(i int) {
 			op := opts[i]
@@ -89,7 +91,7 @@ func NewPools(option *PoolsParameter, opts ...*PoolOptions) (*Pools, error) {
 				pool.retryNewList <- op
 				return
 			}
-			pool.connPools[op.adrr] = cp
+			pool.connPools[op.addr] = cp
 		}(i)
 	}
 
@@ -98,6 +100,7 @@ func NewPools(option *PoolsParameter, opts ...*PoolOptions) (*Pools, error) {
 
 	// 检查空闲连接
 	go pool.idlecheck()
+	go pool.LRU.RunIdleCheck(option.idleCheckFreq)
 
 	// 开启重试
 	go pool.retryNew()
@@ -109,10 +112,10 @@ func NewPools(option *PoolsParameter, opts ...*PoolOptions) (*Pools, error) {
 
 // NewPoolConnection 新建单个连接池
 func (p *Pools) NewPoolConnection(op *PoolOptions) error {
-	if op.adrr == "" {
+	if op.addr == "" {
 		return ErrAddress
 	}
-	_, ok := p.connPools[op.adrr]
+	_, ok := p.connPools[op.addr]
 
 	if ok {
 		return nil
@@ -121,51 +124,50 @@ func (p *Pools) NewPoolConnection(op *PoolOptions) error {
 	if err != nil {
 		return err
 	}
-	p.connPools[op.adrr] = pc
+	p.connPools[op.addr] = pc
 	return nil
 }
 
-// GetConn 通过给定的adrr 获取连接
-func (p *Pools) GetConn(adrr string) (net.Conn, error) {
+// GetConn 通过给定的addr 获取连接
+func (p *Pools) GetConn(addr string) (net.Conn, error) {
 	if p.closed {
 		return nil, ErrPoolClosed
 	}
-	if _, ok := p.connPools[adrr]; !ok {
+	if _, ok := p.connPools[addr]; !ok {
 		return nil, ErrPoolNotExist
 	}
 
 	// // 如果有空闲连接，则直接返回
-	// if conn := p.popActiveConn(adrr); conn != nil {
-	// 	p.lastUsedTime[adrr] = time.Now()
+	// if conn := p.popActiveConn(addr); conn != nil {
+	// 	p.lastUsedTime[addr] = time.Now()
 	// 	return conn, nil
 	// }
 
-	conn, err := p.connPools[adrr].Get()
-	if err == nil {
-		// 统计连接
-		go func() {
-			// 更新时间
-			p.lastUsedTime[adrr] = time.Now()
-
-			if err == nil {
-				// 统计连接数量
-				p.connNum[adrr] = p.connPools[adrr].currConns
-
-				// 由空闲连接 -> 活跃连接
-				if p.connNum[adrr] >= p.activeThreshold {
-					p.activeConnsNum[adrr] = p.connNum[adrr]
-					//如果原先是空闲连接
-					if _, ok := p.idleConnsNum[adrr]; ok {
-						delete(p.activeConnsNum, adrr)
-						delete(p.idleConnsNum, adrr)
-						p.curIdleConnsNum--
-						p.curActiveConnsNum++
-					}
-				}
-			}
-		}()
+	conn, err := p.connPools[addr].Get()
+	if err != nil {
+		return nil, err
 	}
 
+	// 更新时间
+	p.lastUsedTime[addr] = time.Now()
+	// 将连接池地址移动到链表头部
+	if err == nil {
+		// 统计连接数量
+		p.connNum[addr] = p.connPools[addr].currConns
+
+		// 由空闲连接 -> 活跃连接
+		if p.connNum[addr] >= p.activeThreshold {
+			p.activeConnsNum[addr] = p.connNum[addr]
+			//如果原先是空闲连接
+			if _, ok := p.idleConnsNum[addr]; ok {
+				delete(p.activeConnsNum, addr)
+				delete(p.idleConnsNum, addr)
+				p.curIdleConnsNum--
+				p.curActiveConnsNum++
+			}
+		}
+	}
+	p.LRU.Add(addr)
 	return conn, err
 }
 
@@ -177,21 +179,22 @@ func (p *Pools) PutConn(conn net.Conn) {
 		return
 	}
 
-	adrr := conn.RemoteAddr().String()
-	if _, ok := p.connPools[adrr]; !ok {
+	addr := conn.RemoteAddr().String()
+	if _, ok := p.connPools[addr]; !ok {
 		// conn对应的连接池不存在，说明已经被关闭
 		conn.Close()
 		return
 	}
-	err := p.connPools[adrr].Put(conn)
+	err := p.connPools[addr].Put(conn)
 	//不管成功与否，更新时间
-	p.lastUsedTime[adrr] = time.Now()
+	p.LRU.Add(addr)
+	p.lastUsedTime[addr] = time.Now()
 
 	if err != ErrPoolFull {
 
 		//如果是空闲连接，池满直接关闭
-		if _, ok := p.idleConnsNum[adrr]; ok {
-			p.idleConnsNum[adrr]--
+		if _, ok := p.idleConnsNum[addr]; ok {
+			p.idleConnsNum[addr]--
 			conn.Close()
 		}
 
@@ -203,11 +206,14 @@ func (p *Pools) PutConn(conn net.Conn) {
 			return
 		}
 
-		a := []interface{}{p, conn}
-		p.retryPutList <- a
+		go func() {
+			// 加入异步队列重试 go防止满了阻塞
+			a := []interface{}{p, conn}
+			p.retryPutList <- a
+		}()
 
 	} else {
-		p.lastUsedTime[adrr] = time.Now()
+		p.lastUsedTime[addr] = time.Now()
 	}
 	return
 }
@@ -231,15 +237,17 @@ func (p *Pools) Close() error {
 
 			err := p.connPools[k].ClosePool()
 			if err != nil || p.connPools[k].closed != true {
-				// 删除失败,加入重试队列  不能放adrr  要直接放 *ConnectionPool
-				p.retryDelList <- v
+				go func() {
+					// 删除失败,加入重试队列  不放addr  直接放 *ConnectionPool
+					p.retryDelList <- v
+				}()
 			} else {
 				// 删除成功
 
 				// SetFinalizer
 				runtime.SetFinalizer(p.connPools[k], p.connPools[k].Finalizer)
 			}
-			// 无论如何都delete
+			// 失败也delete，最终一致性
 			delete(p.connPools, k)
 
 		}(k, v)
@@ -264,27 +272,26 @@ func (p *Pools) Close() error {
 }
 
 // ClosePool 当独关闭一个连接池
-func (p *Pools) ClosePool(adrr string) error {
+func (p *Pools) ClosePool(addr string) error {
 	if p.closed {
 		return ErrPoolClosed
 	}
-	if _, ok := p.connPools[adrr]; !ok {
+	if _, ok := p.connPools[addr]; !ok {
 		return ErrPoolNotExist
 	}
 
 	// 统计连接
-	p.connNum[adrr] -= p.connPools[adrr].currConns
-	if _, ok := p.activeConnsNum[adrr]; ok {
-		delete(p.activeConnsNum, adrr)
+	p.connNum[addr] -= p.connPools[addr].currConns
+	if _, ok := p.activeConnsNum[addr]; ok {
+		delete(p.activeConnsNum, addr)
 	}
-	if _, ok := p.idleConnsNum[adrr]; ok {
-		delete(p.idleConnsNum, adrr)
+	if _, ok := p.idleConnsNum[addr]; ok {
+		delete(p.idleConnsNum, addr)
 	}
 
-	err := p.connPools[adrr].ClosePool()
-
+	err := p.connPools[addr].ClosePool()
 	if err == nil {
-		delete(p.connPools, adrr)
+		delete(p.connPools, addr)
 	} else {
 		return err
 	}
@@ -293,7 +300,7 @@ func (p *Pools) ClosePool(adrr string) error {
 
 //	active -> idle
 //
-// idlecheck(超过一段时间 time.now()> p.idleTimeout+poolconn.lastusedtime没用就active变成idle)
+// idlecheck(超过一段时间 time.now()> p.idleTimeout+poolconn.lastusedtime 没用就active变成idle)
 func (p *Pools) idlecheck() {
 	ticker := time.NewTicker(p.idleCheckFreq)
 	defer ticker.Stop()
@@ -308,10 +315,10 @@ func (p *Pools) idlecheck() {
 			// 连接池已关闭
 			if p.closed {
 				p.idlecheckLock.RUnlock()
-				continue
+				return
 			}
 
-			// 检查所以adrr连接的使用频率
+			// 检查所以addr连接的使用频率
 			for k, v := range p.connPools {
 				go func(addr string, cp *ConnectionPool) {
 					cp.idlecheckLock.RLock()
@@ -418,15 +425,16 @@ func (p *Pools) sortTime(mod int, sortedTimeNew []interface{}) {
 
 // 限制最连接数
 func (p *Pools) checkConns(mod int) {
-	//对lastusedtime排序，再对使用频率靠前的expand   靠后的shrink
-	sortedTime := make([]interface{}, len(p.lastUsedTime)/2)
+	// //对lastusedtime排序，再对使用频率靠前的expand   靠后的shrink
+	// sortedTime := make([]interface{}, len(p.lastUsedTime)/2)
 
 	if mod >= 0 {
 		//expand
 
-		p.sortTime(mod, sortedTime)
-		for i := 0; i <= p.maxActiveConnsNum-len(p.activeConnsNum); i++ {
-			k := sortedTime[i].([2]interface{})[1].(string)
+		// p.sortTime(mod, sortedTime)
+		addrs := p.LRU.GetOldest(p.maxActiveConnsNum - len(p.activeConnsNum))
+		for i := 0; i <= p.maxActiveConnsNum-len(p.activeConnsNum) && i < len(addrs); i++ {
+			k := addrs[i]
 			go func(addr string, cp *ConnectionPool) {
 				if cp.currConns <= cp.shrinkNum {
 					go cp.expand()
@@ -440,10 +448,10 @@ func (p *Pools) checkConns(mod int) {
 	} else {
 		//shrink
 
-		p.sortTime(mod, sortedTime)
-
-		for i := 0; i <= p.maxIdleConnsNum-len(p.idleConnsNum); i++ {
-			k := sortedTime[i].([2]interface{})[1].(string)
+		// p.sortTime(mod, sortedTime)
+		addr := p.LRU.GetNewest(p.maxIdleConnsNum - len(p.idleConnsNum))
+		for i := 0; i <= p.maxIdleConnsNum-len(p.idleConnsNum) && i < len(addr); i++ {
+			k := addr[i]
 			go func(addr string, cp *ConnectionPool) {
 				if cp.currConns > cp.shrinkNum {
 					go cp.shrink()
@@ -462,7 +470,7 @@ func (p *Pools) retryNew() {
 		select {
 		case op := <-p.retryNewList:
 			go func(op *PoolOptions) {
-				if _, ok := p.connPools[op.adrr]; ok {
+				if _, ok := p.connPools[op.addr]; ok {
 					//如果此时addr对应的连接池已经被创建了
 					return
 				}
@@ -472,7 +480,7 @@ func (p *Pools) retryNew() {
 					// p.retryList <- op
 					return
 				}
-				p.connPools[op.adrr] = cp
+				p.connPools[op.addr] = cp
 			}(op)
 		case <-p.retryNewStopChan:
 			close(p.retryNewList)
@@ -494,7 +502,7 @@ func (p *Pools) retryDelete() {
 					// p.retryList <- op
 					return
 				}
-				// 批量删除，此时 p.connPools 已经被回收 不需要 delete(p.connPools, cp.adrr)
+				// 批量删除，此时 p.connPools 已经被回收 不需要 delete(p.connPools, cp.addr)
 			}(cp)
 		case <-p.retryDelStopChan:
 			close(p.retryDelList)
@@ -504,22 +512,22 @@ func (p *Pools) retryDelete() {
 	}
 }
 
-// retry 重试删除连接池
+// retry 重试放回连接池
 func (p *Pools) retryPut() {
 	for {
 		select {
 		case rp := <-p.retryPutList:
 			go func(p *Pools, c net.Conn) {
-				adrr := c.RemoteAddr().String()
-				err := p.connPools[adrr].Put(c)
+				addr := c.RemoteAddr().String()
+				err := p.connPools[addr].Put(c)
 				// 出错，删除
 				if err != nil {
 					c.Close()
 					//判断此时是否为空闲连接
-					if p.connPools[adrr].currConns < p.activeThreshold {
-						delete(p.activeConnsNum, adrr)
+					if p.connPools[addr].currConns < p.activeThreshold {
+						delete(p.activeConnsNum, addr)
 					} else {
-						p.activeConnsNum[adrr]--
+						p.activeConnsNum[addr]--
 					}
 					return
 				}
