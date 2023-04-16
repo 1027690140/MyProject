@@ -16,6 +16,7 @@ const (
 type RPCMsg struct {
 	*Header                         // 指针类型，占用 Header 的空间
 	Error         error             // 错误信息
+	ServiceAppID  string            // 服务应用ID
 	ServiceClass  string            // 服务类名
 	ServiceMethod string            // 服务方法名
 	Payload       []byte            // 请求/响应的数据
@@ -40,6 +41,18 @@ func (msg *RPCMsg) Send(writer io.Writer) error {
 	//write body total len :4 byte
 	dataLen := SPLIT_LEN + len(msg.ServiceClass) + SPLIT_LEN + len(msg.ServiceMethod) + SPLIT_LEN + len(msg.Payload)
 	err = binary.Write(writer, binary.BigEndian, uint32(dataLen)) //4
+	if err != nil {
+		return err
+	}
+
+	// write ServiceAppID method len :4 byte
+	err = binary.Write(writer, binary.BigEndian, uint32(len(msg.ServiceAppID)))
+	if err != nil {
+		return err
+	}
+
+	// write ServiceAppID method
+	err = binary.Write(writer, binary.BigEndian, util.StringToByte(msg.ServiceAppID))
 	if err != nil {
 		return err
 	}
@@ -102,9 +115,19 @@ func (msg *RPCMsg) Decode(r io.Reader) error {
 	data := make([]byte, bodyLen)
 	_, err = io.ReadFull(r, data)
 
-	//service class len
+	//Service AppID len
 	start := 0
 	end := start + SPLIT_LEN
+	ServiceAppID := binary.BigEndian.Uint32(data[start:end]) //0,4
+
+	//service ServiceAppID
+	start = end
+	end = start + int(ServiceAppID)
+	msg.ServiceAppID = util.ByteToString(data[start:end]) //x+4, x+4+y
+
+	//service class len
+	start = 0
+	end = start + SPLIT_LEN
 	classLen := binary.BigEndian.Uint32(data[start:end]) //0,4
 
 	//service class

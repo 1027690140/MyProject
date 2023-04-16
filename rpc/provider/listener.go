@@ -18,6 +18,7 @@ var ServerClosedErr = errors.New("server closed error!")
 
 var _ Listener = new(RPCListener)
 
+// Listener is the interface that wraps the basic Run method.
 type Listener interface {
 	Run() error
 	SetHandler(string, Handler)
@@ -27,9 +28,9 @@ type Listener interface {
 	Shutdown()
 }
 
-// base on tcp
+// RPCListener base on tcp
 type RPCListener struct {
-	ServiceIp    string
+	ServiceIP    string
 	ServicePort  int
 	ServerOption ServerOption
 	Plugins      PluginContainer
@@ -40,8 +41,9 @@ type RPCListener struct {
 	shutdown     int32         //关闭处理中标志位
 }
 
+// NewRPCListener 创建一个新的RPCListener
 func NewRPCListener(ServerOption ServerOption) *RPCListener {
-	return &RPCListener{ServiceIp: ServerOption.Ip,
+	return &RPCListener{ServiceIP: ServerOption.Ip,
 		ServicePort:  ServerOption.Port,
 		ServerOption: ServerOption,
 		Handlers:     make(map[string]Handler),
@@ -49,10 +51,12 @@ func NewRPCListener(ServerOption ServerOption) *RPCListener {
 	}
 }
 
+// SetPlugins 设置插件
 func (l *RPCListener) SetPlugins(plugins PluginContainer) {
 	l.Plugins = plugins
 }
 
+// SetHandler 设置Handler
 func (l *RPCListener) SetHandler(name string, handler Handler) {
 	if _, ok := l.Handlers[name]; ok {
 		log.Printf("%s is registered!\n", name)
@@ -61,17 +65,17 @@ func (l *RPCListener) SetHandler(name string, handler Handler) {
 	l.Handlers[name] = handler
 }
 
-// start listening and waiting for connection
+// Run 监听等待连接
 func (l *RPCListener) Run() error {
 	//listen on port by tcp
-	addr := fmt.Sprintf("%s:%d", l.ServiceIp, l.ServicePort)
+	addr := fmt.Sprintf("%s:%d", l.ServiceIP, l.ServicePort)
 	log.Println(l.ServerOption.NetProtocol, addr)
-	nl, err := net.Listen(l.ServerOption.NetProtocol, addr)
+	netListener, err := net.Listen(l.ServerOption.NetProtocol, addr)
 	if err != nil {
 		//panic(err)
 		return err
 	}
-	l.nl = nl
+	l.nl = netListener
 	log.Printf("listen on %s success!", addr)
 
 	//accept conn
@@ -103,7 +107,10 @@ func (l *RPCListener) acceptConn() {
 		//plugin aop
 		conn, ok := l.Plugins.ConnAcceptHook(conn)
 		if !ok {
-			conn.Close()
+			//ConnAcceptHook 插件处理 conn 返回 false，说明连接不被接受。因此，执行 conn.Close() 关闭该连接，继续执行下一次循环，处理下一个连接
+			if conn != nil {
+				conn.Close()
+			}
 			continue
 		}
 		log.Printf("server accepted conn: %v\n", conn.RemoteAddr().String())
@@ -115,7 +122,7 @@ func (l *RPCListener) acceptConn() {
 
 // handle each connection
 func (l *RPCListener) handleConn(conn net.Conn) {
-	//关闭挡板
+	//关闭
 	if l.isShutdown() {
 		return
 	}
@@ -129,7 +136,7 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 	}()
 
 	for {
-		//关闭挡板
+		//关闭
 		if l.isShutdown() {
 			return
 		}
@@ -153,17 +160,19 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 		}
 
 		//decode
-		coder := global.Codecs[msg.Header.SerializeType()] //get from cache
+		// l.Plugins.BeforeDecodeHook(msg)
+		coder := global.Codecs[msg.Header.SerializeType()] // 选择解码器
 		if coder == nil {
 			return
 		}
+		// l.Plugins.BeforeDecodeArgHook(msg)
+		// 调用方法的入参
 		inArgs := make([]interface{}, 0)
 		err = coder.Decode(msg.Payload, &inArgs) //rpcdata
 		if err != nil {
 			log.Println("server request decode err:%v\n", err)
 			return
 		}
-		//log.Printf("server request decode data finish:%v\n", inArgs)
 
 		//call local service
 		handler, ok := l.Handlers[msg.ServiceClass]
@@ -172,12 +181,11 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 			return
 		}
 
-		l.Plugins.BeforeCallHook(msg.ServiceClass, msg.ServiceMethod, inArgs) //ctx
+		l.Plugins.BeforeCallHook(msg.ServiceClass, msg.ServiceMethod, inArgs)
 
 		result, err := handler.Handle(msg.ServiceMethod, inArgs)
 
 		l.Plugins.AfterCallHook(msg.ServiceClass, msg.ServiceMethod, inArgs, result, err)
-		//log.Println("server call local service finish! result:", result)
 
 		//encode
 		encodeRes, err := coder.Encode(result) //[]byte result + err
@@ -188,6 +196,8 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 
 		//send result timeout
 		if l.ServerOption.WriteTimeout != 0 {
+			//设置写超时
+			startTime = time.Now()
 			conn.SetWriteDeadline(startTime.Add(l.ServerOption.WriteTimeout))
 		}
 
@@ -235,7 +245,7 @@ func (l *RPCListener) sendData(conn net.Conn, payload []byte) error {
 // net addr
 func (l *RPCListener) GetAddrs() []string {
 	//l.nl.Addr()
-	addr := fmt.Sprintf("tcp://%s:%d", l.ServiceIp, l.ServicePort)
+	addr := fmt.Sprintf("tcp://%s:%d", l.ServiceIP, l.ServicePort)
 	return []string{addr}
 }
 
@@ -269,6 +279,7 @@ func (l *RPCListener) Close() {
 func (l *RPCListener) Shutdown() {
 	atomic.CompareAndSwapInt32(&l.shutdown, 0, 1)
 	for {
+		// 确保所有请求连接都处理完毕
 		if atomic.LoadInt32(&l.handlingNum) == 0 {
 			break
 		}

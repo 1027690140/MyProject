@@ -18,7 +18,7 @@ func (handler *RPCServerHandler) Handle(method string, params []interface{}) ([]
 	//get arguments if params is not empty
 	args := make([]reflect.Value, len(params))
 	for i := range params {
-		args[i] = reflect.ValueOf(params[i]) //[1]
+		args[i] = reflect.ValueOf(params[i]) //
 	}
 
 	//get method

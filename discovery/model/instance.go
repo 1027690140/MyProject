@@ -62,7 +62,7 @@ func (a *Application) Instances() (is []*Instance) {
 	return
 }
 
-// InstanceInfo return slice of instances.if up is true,return all status instance else return up status instance
+// InstanceInfo 返回实例切片。如果 up 为真，则返回所有状态实例，否则返回 up 状态实例
 func (p *Apps) InstanceInfo(zone string, latestTime int64, status uint32) (ci *InstanceInfo, err error) {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
@@ -80,9 +80,9 @@ func (p *Apps) InstanceInfo(zone string, latestTime int64, status uint32) (ci *I
 			ok = true
 			instance := make([]*Instance, 0)
 			for _, i := range app.Instances() {
-				// if up is false return all status instance
+				// 如果 up 为false返回所有状态实例
 				if i.filter(status) {
-					// if i.Status == InstanceStatusUP && i.LatestTimestamp > latestTime { // TODO(felix): increase
+					// if i.Status == InstanceStatusUP && i.LatestTimestamp > latestTime
 					ni := new(Instance)
 					*ni = *i
 					instance = append(instance, ni)

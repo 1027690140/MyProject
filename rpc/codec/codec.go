@@ -28,6 +28,7 @@ func (c JSONCodec) Decode(data []byte, i interface{}) error {
 	return decode.Decode(i)
 
 }
+
 func NewJSONCodec(conn io.ReadWriteCloser) Codec {
 	return &JSONCodec{}
 }
@@ -36,7 +37,7 @@ var _ Codec = (*GobCodec)(nil)
 
 type GobCodec struct {
 	conn io.ReadWriteCloser
-	buf  *bufio.Writer
+	buf  *bufio.Writer // 缓冲区
 	dec  *gob.Decoder
 	enc  *gob.Encoder
 }
@@ -74,6 +75,7 @@ func (c *GobCodec) ReadBody(body interface{}) error {
 	return c.dec.Decode(body)
 }
 
+// Write with buffer
 func (c *GobCodec) Write(h *msg.RPCMsg, body interface{}) (err error) {
 	defer func() {
 		_ = c.buf.Flush()

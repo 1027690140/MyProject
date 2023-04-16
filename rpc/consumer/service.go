@@ -8,7 +8,7 @@ import (
 type Service struct {
 	Class  string
 	Method string
-	AppId  string
+	AppId  string   // demo: User.GetUserById.15
 	Addrs  []string // demo http@10.0.0.1:2222; tcp@10.0.0.1:1111
 }
 

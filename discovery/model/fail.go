@@ -31,16 +31,15 @@ type ASyncPamars struct {
 	action         configs.Action
 	instance       *Instance
 	data           interface{}
-	failBackFail   chan error    // 异步执行成功,存放结果
-	failBackSucess chan struct{} // 异步执行失败
+	failBackSucess chan struct{} // 异步执行成功
+	failBackFail   chan error    // 异步执行失败
 	failBackId     chan int      // 任务ID
 	isTimeOut      bool          // 判断任务是否超时
 }
 
 // 保存参数
-func NewPamars(id int, ctx context.Context, uri string, action configs.Action, instance *Instance, data interface{}, params map[string]interface{}) *ASyncPamars {
+func NewPamars(ctx context.Context, uri string, action configs.Action, instance *Instance, data interface{}, params map[string]interface{}) *ASyncPamars {
 	return &ASyncPamars{
-		id:       id,
 		ctx:      ctx,
 		uri:      uri,
 		action:   action,

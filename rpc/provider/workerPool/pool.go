@@ -104,24 +104,42 @@ func (p *Pool) Done() {
 
 // Submit submits a task to the pool.
 func (p *Pool) Submit(task taskFunc) error {
+	if task == nil {
+		return fmt.Errorf("task is nil")
+	}
+
 	if len(p.release) > 0 {
-		return fmt.Errorf("Pool is closed")
+		return fmt.Errorf("pool is closed")
 	}
 	if atomic.LoadInt32(&p.active) >= p.capacity {
 		return fmt.Errorf("Pool is full")
 	}
 
-	p.lock.RLock()
-	defer p.lock.RUnlock()
+	// 如果当前活跃的worker数量小于Pool的容量，则创建一个新的worker
+	if p.active < p.capacity {
+		p.active++
 
-	w := p.getWorker()
-	w.task <- task
+		worker := &Worker{
+			pool:     p,
+			task:     make(chan taskFunc, 1),
+			lastUsed: time.Now(),
+		}
 
-	return nil
+		p.workers = append(p.workers, worker)
 
+		worker.task <- task
+
+		return nil
+	} else {
+		worker := p.getWorker()
+		worker.task <- task
+	}
+
+	// 如果当前没有空闲的worker且活跃的worker数量已达到Pool的容量，则返回错误
+	return fmt.Errorf("no available worker")
 }
 
-// Close closes the pool and all its workers.
+// Close  pool
 func (p *Pool) Close() {
 	p.once.Do(func() {
 		p.lock.RLock()
@@ -134,7 +152,6 @@ func (p *Pool) Close() {
 	})
 }
 
-// getWorker returns a available worker to run the tasks.
 func (p *Pool) getWorker() *Worker {
 	var w *Worker
 	// 标志变量，判断当前正在运行的worker数量是否已到达Pool的容量上限

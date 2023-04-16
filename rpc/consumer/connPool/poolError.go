@@ -23,4 +23,6 @@ var (
 	ErrPoolsOptionNotExist    ErrPool = errors.New("new Pools Option Not Exist")
 	ErrPoolEmpty              ErrPool = errors.New("new Pools Empty  ")
 	ErrPoolFull               ErrPool = errors.New("new Pools Full   ")
+	ErrShrinkTooMuch          ErrPool = errors.New("Shrink too often")
+	ErrExpandTooMuch          ErrPool = errors.New("Expand too often")
 )

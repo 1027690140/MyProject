@@ -36,10 +36,19 @@ type poolLocker struct {
 	keepaliveLock sync.RWMutex // keepalive检查锁
 }
 
+// 记录 expander 和 shrinker 的时间 ，防止频繁扩容缩容
+type timeRecorder struct {
+	expandReocrd      time.Time
+	shrinkRecord      time.Time
+	minShrinkInterval time.Duration // 最小缩容间隔
+	minExpandInterval time.Duration // 最小扩容间隔
+}
+
 // ConnectionPool 某个addr的连接池
 type ConnectionPool struct {
 	poolLocker // 锁
 	poolChecker
+	*timeRecorder
 	addr        string
 	newConnFunc func(string) (net.Conn, error)
 
@@ -99,17 +108,18 @@ func NewConnectionPool(newConnFunc func(addr string) (net.Conn, error), option *
 			keepAliveStopChan: make(chan struct{}),
 			keepAliveChan:     make(chan struct{}, option.poolNum),
 		},
-		addr:        option.addr,
-		newConnFunc: newConnFunc,
-		connections: make([]chan *poolConn, option.poolNum),
-		lastused:    make([]time.Time, option.maxConns),
-		minConns:    option.minConns,
-		maxConns:    option.maxConns,
-		currConns:   0,
-		poolNum:     option.poolNum,
-		connChanNum: option.maxConns / option.poolNum,
-		poolClosed:  make(chan struct{}),
-		closed:      false, timerPool: timerPool,
+		timeRecorder: &timeRecorder{shrinkRecord: time.Now(), expandReocrd: time.Now(), minShrinkInterval: option.minShrinkInterval, minExpandInterval: option.minexpandInterval},
+		addr:         option.addr,
+		newConnFunc:  newConnFunc,
+		connections:  make([]chan *poolConn, option.poolNum),
+		lastused:     make([]time.Time, option.maxConns),
+		minConns:     option.minConns,
+		maxConns:     option.maxConns,
+		currConns:    0,
+		poolNum:      option.poolNum,
+		connChanNum:  option.maxConns / option.poolNum,
+		poolClosed:   make(chan struct{}),
+		closed:       false, timerPool: timerPool,
 		reuse:             option.reuse,
 		roundRobinCounter: 0,
 	}
@@ -424,9 +434,13 @@ func (p *ConnectionPool) Put(conn net.Conn) error {
 		// ErrConnectionPoolClosed
 		return nil
 	}
-
+	var err error
 	//清空 连接的缓冲区 而不关闭连接
-	err := conn.SetDeadline(time.Now())
+	if err = conn.SetDeadline(time.Now().Add(-1 * time.Second)); err == nil {
+		// 重置写入超时时间
+		err = conn.SetDeadline(time.Now().Add(p.connectionTimeout))
+	}
+
 	if err != nil {
 		if p.reuse {
 			conn.Close()
@@ -472,6 +486,11 @@ func (p *ConnectionPool) wrapConn(conn net.Conn) net.Conn {
 // expand 扩容连接池
 func (p *ConnectionPool) expand() error {
 
+	//上一次缩容时间小于最小扩容时间间隔，不进行缩容
+	if &p.expandReocrd != nil && time.Since(p.expandReocrd) < p.minExpandInterval {
+		return ErrExpandTooMuch
+	}
+
 	p.expandingLock.Lock()
 	defer p.expandingLock.Unlock()
 	// 如果当前连接数已经达到最大连接数，则无法再扩容
@@ -511,12 +530,17 @@ func (p *ConnectionPool) expand() error {
 		p.connections[len(p.connections)-1] <- conn.(*poolConn)
 		p.currConns++
 	}
-
+	p.expandReocrd = time.Now()
 	return nil
 }
 
 // shrink 缩容连接池
 func (p *ConnectionPool) shrink() error {
+	//上一次缩容时间小于最小缩容时间间隔，不进行缩容
+	if &p.shrinkRecord != nil && time.Since(p.shrinkRecord) < p.minShrinkInterval {
+		return ErrShrinkTooMuch
+	}
+
 	p.shrinkingLock.Lock()
 	defer p.shrinkingLock.Unlock()
 	// 如果连接池已经为空，则无法再缩容
@@ -557,6 +581,7 @@ func (p *ConnectionPool) shrink() error {
 				p.connections = p.connections[len(p.connections):]
 			}
 		}
+		p.shrinkRecord = time.Now()
 	}
 
 	return nil
@@ -566,33 +591,61 @@ func (p *ConnectionPool) shrink() error {
 func (p *ConnectionPool) ClosePool() error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
+
+	// 创建一个超时上下文
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	// 关闭连接池等待组
 	stopWaitGroup := sync.WaitGroup{}
-
-	stopWaitGroup.Add(len(p.connections))
+	lenp := len(p.connections)
+	stopWaitGroup.Add(lenp)
 
 	// 关闭所有连接通道
-	for i := 0; i < len(p.connections); i++ {
+	for i := 0; i < lenp; i++ {
 		// 回收连接池中所有连接
 		connCh := p.connections[i]
 		go func(connCh chan *poolConn) {
 			defer stopWaitGroup.Done()
-			for len(connCh) > 0 {
-				conn := <-connCh
-				_ = conn.Close()
-				p.currConns--
+			for c := range connCh {
+				select {
+
+				default:
+					conn := c
+					err := conn.Close()
+					if err != nil {
+						log.Println("关闭连接失败", err)
+					}
+					p.currConns--
+
+				case <-ctx.Done(): // 超时后取消协程执行
+					return
+				}
 			}
+
 			close(connCh)
 		}(connCh)
 	}
-	stopWaitGroup.Wait()
 
-	// 关闭保活协程
-	close(p.keepAliveStopChan)
-	close(p.poolClosed)
-	p.closed = true
+	// 等待所有协程执行完毕
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stopWaitGroup.Wait()
+	}()
 
-	return nil
+	select {
+	case <-done: // 所有协程执行完毕
+		log.Printf("成功关闭连接池%s", p.addr)
+		// 关闭保活协程
+		close(p.keepAliveStopChan)
+		close(p.poolClosed)
+		p.closed = true
+		return nil
+	case <-ctx.Done(): // 超时后取消协程执行
+		log.Printf("超时关闭连接池%s", p.addr)
+		return ctx.Err()
+	}
 
 }
 

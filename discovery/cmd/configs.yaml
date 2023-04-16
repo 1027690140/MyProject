@@ -1,6 +1,6 @@
-zones: "zone1"
 nodes: ["localhost:8881", "localhost:8882", "localhost:8883"]
 http_server: "localhost:8881"
 hostname: "discovery1"
 env: "dev"
+zones: "zone1"
 protect: false

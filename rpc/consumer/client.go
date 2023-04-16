@@ -32,8 +32,9 @@ type ClientOption struct {
 	WriteTimeout      time.Duration
 	SerializeType     protocol.SerializeType
 	CompressType      protocol.CompressType
-	NetProtocol       string //"tcp", "udp","ip", "ip4", "ip6","unix", "unixgram", "unixpacket";tcp or http or quic(todo)
+	NetProtocol       string //"tcp", "udp",   http or quic(todo)
 	LoadBalanceMode   LoadBalanceMode
+	ConnPool          bool //是否使用连接池
 }
 
 var DefaultClientOption = ClientOption{
@@ -47,11 +48,12 @@ var DefaultClientOption = ClientOption{
 	CompressType:      protocol.None,
 	NetProtocol:       "tcp",
 	LoadBalanceMode:   RoundRobinBalance,
+	ConnPool:          false,
 }
 
 var _ Client = new(RPCClient)
 
-// TCP client
+// RPCClient client
 type RPCClient struct {
 	conn         net.Conn
 	ClientOption ClientOption
@@ -62,7 +64,7 @@ func NewClient(ClientOption ClientOption) Client {
 	return &RPCClient{ClientOption: ClientOption}
 }
 
-// "tcp", "tcp4", "tcp6":
+// Connect "tcp", "tcp4", "tcp6":
 func (cli *RPCClient) Connect(addr string) error {
 	conn, err := net.DialTimeout(cli.ClientOption.NetProtocol, addr, cli.ClientOption.ConnectionTimeout)
 	if err != nil {
@@ -73,6 +75,7 @@ func (cli *RPCClient) Connect(addr string) error {
 	return nil
 }
 
+// Invoke 发起调用
 func (cli *RPCClient) Invoke(ctx context.Context, service *Service, stub interface{}, params ...interface{}) (interface{}, error) {
 	//make func : this step can be prepared before invoke and store into cache
 	cli.MakeFunc(service, stub)
@@ -80,28 +83,26 @@ func (cli *RPCClient) Invoke(ctx context.Context, service *Service, stub interfa
 	return cli.wrapCall(ctx, stub, params...)
 }
 
+// Close 关闭连接
 func (cli *RPCClient) Close() {
 	if cli.conn != nil {
 		cli.conn.Close()
 	}
 }
 
+// GetAddr 获取当前连接的地址
 func (cli *RPCClient) GetAddr() string {
 	//cli.conn.RemoteAddr().String()
 	return cli.addr
 }
 
-// make call func.
-//
-//	The proxy function is generated through reflection,
-//	and the work of network connection,
-//	request data serialization,
-//	network transmission,
-//	and response return data analysis is completed in the proxy function
+// MakeFunc 通过反射生成代理函数，
+// 网络连接、请求数据序列化、网络传输、响应返回数据解析等工作都在代理函数中完成
 func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 	container := reflect.ValueOf(methodPtr).Elem() //反射获取函数元素
 	coder := global.Codecs[cli.ClientOption.SerializeType]
 
+	//代理函数
 	handler := func(req []reflect.Value) []reflect.Value {
 		//出参个数
 		numOut := container.Type().NumOut()
@@ -116,7 +117,7 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 			return outArgs
 		}
 
-		//in args
+		//入参
 		inArgs := make([]interface{}, 0, len(req))
 		for _, arg := range req {
 			inArgs = append(inArgs, arg.Interface())
@@ -128,7 +129,7 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 			return errorHandler(err)
 		}
 
-		//send by network
+		//send request
 		startTime := time.Now()
 		if cli.ClientOption.WriteTimeout != 0 {
 			cli.conn.SetWriteDeadline(startTime.Add(cli.ClientOption.WriteTimeout))
@@ -140,6 +141,7 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 		msg.SetSerializeType(cli.ClientOption.SerializeType)
 		msg.ServiceClass = service.Class
 		msg.ServiceMethod = service.Method
+		msg.ServiceAppID = service.AppId
 		msg.Payload = payload
 
 		err = msg.Send(cli.conn)
@@ -149,7 +151,7 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 		}
 		log.Println("send success!")
 
-		//read from network
+		// read response
 		if cli.ClientOption.ReadTimeout != 0 {
 			cli.conn.SetReadDeadline(startTime.Add(cli.ClientOption.ReadTimeout))
 		}
@@ -187,7 +189,8 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 		return outArgs
 	}
 
-	container.Set(reflect.MakeFunc(container.Type(), handler)) //构造函数
+	//构造函数
+	container.Set(reflect.MakeFunc(container.Type(), handler))
 }
 
 func (cli *RPCClient) wrapCall(ctx context.Context, stub interface{}, params ...interface{}) (interface{}, error) {
@@ -200,6 +203,7 @@ func (cli *RPCClient) wrapCall(ctx context.Context, stub interface{}, params ...
 	for idx, param := range params {
 		in[idx] = reflect.ValueOf(param)
 	}
+	//f.Call是通过反射调用函数，并传入参数in
 	result := f.Call(in)
 	return result, nil
 }

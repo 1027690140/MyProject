@@ -14,7 +14,6 @@ import (
 	"service_discovery/pkg/errcode"
 	"service_discovery/pkg/httputil"
 	"service_discovery/pkg/queue"
-	uid "service_discovery/pkg/uniqueId"
 
 	"strconv"
 	"time"
@@ -105,11 +104,8 @@ func (node *Node) call(ctx context.Context, uri string, action configs.Action, i
 		params["latest_timestamp"] = strconv.FormatInt(instance.LatestTimestamp, 10)
 
 	}
-	// 生产全局ID
-	id := uid.GenerateSnowflakeID()
-
 	//失败参数
-	ASyncPamars := NewPamars(id, ctx, uri, action, instance, data, params)
+	ASyncPamars := NewPamars(ctx, uri, action, instance, data, params)
 
 	//request other server
 	resp, err := httputil.HttpPost(uri, params)
@@ -124,7 +120,7 @@ func (node *Node) call(ctx context.Context, uri string, action configs.Action, i
 		log.Println(err, "retry Unmarshal")
 
 		go AsyncRetry(ctx, uri, action, instance, data, ASyncPamars)
-		return <-ASyncPamars.failBackFail
+		return nil
 
 	}
 	if res.Code != configs.StatusOK { //code!=200
@@ -159,11 +155,9 @@ func AsyncRetry(ctx context.Context, uri string, action configs.Action, instance
 
 	//异步执行成功
 	case <-failPamars.failBackSucess:
-		idd := <-failPamars.failBackId
-		if failPamars.id == idd { //确保id对应
-			return nil
-		}
+
 		log.Printf("--Failback -- servicePath --- task ID mismatchr ")
+		close(failPamars.failBackId)
 		return errors.New("task ID mismatch")
 
 	//异步执行失败
@@ -172,7 +166,7 @@ func AsyncRetry(ctx context.Context, uri string, action configs.Action, instance
 		return err
 	//异步执行超时
 	case <-ctx.Done():
-		// 设置超时 逻辑删除，队列中的任务不执行  Set timeout tombstone, task  do not execute
+		// 设置超时 逻辑删除，队列中的任务不执行
 		failPamars.isTimeOut = true
 		failPamars.failBackFail <- fmt.Errorf("---time over ")
 		return ctx.Err()

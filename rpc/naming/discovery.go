@@ -28,6 +28,7 @@ const (
 type Config struct {
 	Nodes []string
 	Env   string
+	Zone  string
 }
 
 var _ Registry = new(Discovery)
@@ -208,6 +209,7 @@ func (dis *Discovery) updateNode() {
 	for {
 		select {
 		case <-ticker.C:
+			// 可以改长轮询监听
 			uri := fmt.Sprintf(_nodesURL, dis.pickNode())
 			log.Println("discovery - request and update node, url:" + uri)
 			params := make(map[string]interface{})
@@ -235,6 +237,7 @@ func (dis *Discovery) updateNode() {
 
 			}
 			curNodes := dis.node.Load().([]string)
+			// 可以改成比较最近更新时间来判断是否更新
 			if !compareNodes(newNodes, curNodes) {
 				dis.node.Store(newNodes)
 				log.Println("nodes list changed!", newNodes)
@@ -245,7 +248,7 @@ func (dis *Discovery) updateNode() {
 	}
 }
 
-// 有重复串问题
+// 对比两个数据是否完全相等
 func compareNodes(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -288,6 +291,7 @@ func (dis *Discovery) Fetch(ctx context.Context, appId string) ([]*Instance, boo
 	params := make(map[string]interface{})
 	params["env"] = dis.conf.Env
 	params["appid"] = appId
+	params["zone"] = dis.conf.Zone
 	params["status"] = 1 //up
 	resp, err := HttpPost(uri, params)
 	if err != nil {
@@ -308,7 +312,6 @@ func (dis *Discovery) Fetch(ctx context.Context, appId string) ([]*Instance, boo
 	var result []*Instance
 	for _, ins := range res.Data.Instances {
 		result = append(result, ins)
-
 	}
 	if len(result) > 0 {
 		ok = true

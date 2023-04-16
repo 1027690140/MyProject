@@ -255,7 +255,6 @@ func (p *Pools) Close() error {
 
 	closeWaitGroup.Wait()
 
-	p.closed = true
 	close(p.checkIdleStopChan)
 	close(p.retryNewStopChan)
 	close(p.retryDelStopChan)
@@ -265,7 +264,7 @@ func (p *Pools) Close() error {
 	p.activeConnsNum = nil
 	p.activeConnsNum = nil
 	p.connPools = nil
-
+	p.closed = true
 	runtime.GC()
 
 	return nil
@@ -480,6 +479,10 @@ func (p *Pools) retryNew() {
 					// p.retryList <- op
 					return
 				}
+				if _, ok := p.connPools[op.addr]; ok || p.closed {
+					//如果此时addr对应的连接池已经被创建或者关闭了
+					return
+				}
 				p.connPools[op.addr] = cp
 			}(op)
 		case <-p.retryNewStopChan:
@@ -506,6 +509,11 @@ func (p *Pools) retryDelete() {
 			}(cp)
 		case <-p.retryDelStopChan:
 			close(p.retryDelList)
+			// 循环处理 retryPutList 中的 Conn 对象
+			for rp := range p.retryDelList {
+				p := rp
+				p.ClosePool()
+			}
 			return
 
 		}
@@ -534,6 +542,11 @@ func (p *Pools) retryPut() {
 			}(rp[0].(*Pools), rp[1].(net.Conn))
 		case <-p.retryPutStopChan:
 			close(p.retryPutList)
+			// 循环处理 retryPutList 中的 Conn 对象
+			for rp := range p.retryPutList {
+				c := rp[1].(net.Conn)
+				c.Close()
+			}
 			return
 		}
 	}

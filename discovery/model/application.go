@@ -60,7 +60,7 @@ func (app *Application) AddInstance(in *Instance, latestTimestamp int64) (*Insta
 	return returnIns, !ok
 }
 
-// 续约
+// Renew 续约
 func (app *Application) Renew(hostname string) (*Instance, bool) {
 	app.lock.Lock()
 	defer app.lock.Unlock()
@@ -74,7 +74,7 @@ func (app *Application) Renew(hostname string) (*Instance, bool) {
 	return copyInstance(appIn), true
 }
 
-// 取消
+// Cancel 取消
 func (app *Application) Cancel(hostname string, latestTimestamp int64) (*Instance, bool, int) {
 	newInstance := new(Instance)
 	app.lock.Lock()

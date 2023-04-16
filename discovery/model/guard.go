@@ -47,15 +47,8 @@ func (gd *Guard) storeLastCount() {
 	atomic.StoreInt64(&gd.lastRenewCount, atomic.SwapInt64(&gd.renewCount, 0))
 }
 
+// 自我保护状态
 func (gd *Guard) selfProtectStatus() bool {
+	// 保护阈值
 	return atomic.LoadInt64(&gd.lastRenewCount) < atomic.LoadInt64(&gd.threshold)
 }
-
-/*
-use google to translate :
-If self-protection is enabled, then the renewal time exceeds the threshold (90 seconds by default)
-and will not be removed. However, if the renewal time exceeds the maximum threshold (3600 seconds by default),
-it will be deleted no matter whether the protection is enabled or not. Because self-protection only protects services
-that have not been renewed for a short period of time due to network reasons, there is a high probability that there
-is a problem if the contract is not renewed for a long time.
-*/

@@ -29,11 +29,13 @@ type PoolOptions struct {
 	addr        string
 	newConnFunc func(string) (net.Conn, error)
 
-	minConns  int // 最小连接数
-	maxConns  int // 最大连接数
-	maxIdle   int // 最大空闲连接数
-	poolNum   int // connections大小
-	shrinknum int // 缩容数目
+	minConns    int // 最小连接数
+	maxConns    int // 最大连接数
+	maxIdle     int // 最大空闲连接数
+	currConns   int // 当前连接数 = 被取出的+还在池子里的
+	poolNum     int // connections大小
+	shrinkNum   int // 缩容数目
+	connChanNum int //  []chan *poolConn 中每个chan大小
 
 	indexFreq         time.Duration // 获取index超时时间
 	idleCheckFreq     time.Duration // 空闲连接检查频率
@@ -41,7 +43,10 @@ type PoolOptions struct {
 	idleTimeout       time.Duration // 空闲连接超时时间
 	keepAliveInterval time.Duration // 保活检查时间
 
-	reuse bool
+	minShrinkInterval time.Duration // 最小缩容间隔
+	minexpandInterval time.Duration // 最小扩容间隔
+
+	reuse bool // 是否复用连接
 }
 
 // DefaultPoolOptions sets a list of recommended options for good performance.
@@ -50,7 +55,7 @@ var DefaultPoolOptions = PoolOptions{
 	maxConns:          50,
 	maxIdle:           20,
 	poolNum:           5,
-	shrinknum:         20,
+	shrinkNum:         20,
 	connectionTimeout: 30 * time.Second, // 连接超时时间
 	idleTimeout:       30 * time.Second, // 空闲连接超时时间
 	keepAliveInterval: 30 * time.Second, // 保活检查时间

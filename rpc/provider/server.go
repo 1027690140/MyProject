@@ -17,6 +17,7 @@ var MagicNumber byte = 0x06
 
 var maxRegisterRetry int = 2
 
+// Server is RPC 服务端接口
 type Server interface {
 	Register(string, interface{}) //error
 	Run()
@@ -52,13 +53,13 @@ var DefaultServerOption = ServerOption{
 
 // TCP Server
 type RPCServer struct {
-	engine       *Engine         // use for http router
-	listener     Listener        //*Listener is error
-	registry     naming.Registry // Used to bind the service registry instance.
-	cancelFunc   context.CancelFunc
-	ServerOption ServerOption
-	Plugins      PluginContainer
-	serviceMap   sync.Map // record method calls
+	engine       *Engine            // use for http router
+	listener     Listener           // Used to bind the service instance.
+	registry     naming.Registry    // Used to bind the service registry instance.
+	cancelFunc   context.CancelFunc // Used to cancel the service registry.
+	ServerOption ServerOption       //
+	Plugins      PluginContainer    //
+	serviceMap   sync.Map           // record method calls
 }
 
 // NewRPCServer
@@ -102,12 +103,13 @@ func (svr *RPCServer) RegisterName(name string, class interface{}) {
 func (svr *RPCServer) Run() {
 	//先启动后暴露服务
 	svr.listener.SetPlugins(svr.Plugins)
+	// TODO  use goroutine pool
 	err := svr.listener.Run()
 	if err != nil {
 		panic(err)
 	}
 
-	//register in discovery,注册失败（重试2次）退出服务
+	//注册失败，重试,多次失败退出服务
 	err = svr.registerToNaming()
 	if err != nil {
 		svr.Close()

@@ -23,6 +23,7 @@ const (
 	CancelURL   = "/api/cancel"
 	RenewURL    = "/api/renew"
 	FetchAllURL = "/api/fetchall"
+	PollsURL    = "/api/polls"
 )
 
 const (

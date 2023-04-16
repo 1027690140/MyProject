@@ -9,8 +9,7 @@ import (
 
 /*
 求余hash算法：hash(object)%N
-
-
+一致性hash算法：hash(object)%2^32
 根据每一台服务器不同的 ip:port 根据自己的 key生成算法 ，生成一个唯一的 key 值
 key => ip:port 把机器唯一的 key 映射机器访问地址 ip:port 设置到一个 有序的循环圆 上
 请求过来的时候，根据请求内容生成按 自己的 key生成算法 也生成一个 请求的 key
@@ -110,9 +109,9 @@ func (c *HashBalancer) GetByKey(key string) string {
 	return c.virtualMap[c.circle[i]]
 }
 
-// search nearly vnode around key
-// sort.Search uses binary search to find key
-// every vnode cover its self and clockwise area
+// 在 key 附近搜索附近的 vnode
+// sort.Search 使用二进制搜索来查找键
+// 每个 vnode 覆盖它自己和顺时针方向的区域
 func (c *HashBalancer) search(key uint32) int {
 	f := func(x int) bool {
 		return c.circle[x] >= key

@@ -17,6 +17,7 @@ type Discovery struct {
 	config *configs.GlobalConfig
 	client *httputil.Client
 
+	lastHost  string
 	protected bool
 	Registry  *Registry
 	Nodes     atomic.Value
@@ -36,19 +37,19 @@ func NewDiscovery(config *configs.GlobalConfig, connOption *ConnOption) *Discove
 	//sync data from other nodes
 	dis.initSync()
 
-	//register discovery
+	//将自己注册到注册中心 ,实现自发现
 	instance := dis.regSelf()
-	//renew discovery
+	//定期续约，每 30s 发送一次续约请求
 	go dis.renewTask(instance)
 
-	//nodes perception
+	//节点感知 维护节点列表
 	go dis.nodesPerception()
 	//exit protected mode
 	go dis.exitProtect()
 	return dis
 }
 
-// sync registry data
+// 遍历所有节点，获取注册表数据，依次注册到本地。这里注意只有当所有数据同步完毕后，该注册中心才可对外提供服务，切换为上线状态。
 func (dis *Discovery) initSync() {
 	nodes := dis.Nodes.Load().(*Nodes)
 	for _, node := range nodes.AllNodes() {
@@ -103,6 +104,7 @@ func (dis *Discovery) regSelf() *Instance {
 		DirtyTimestamp:  now,
 	}
 	dis.Registry.Register(instance, now)
+	//注册后同步到其他集群
 	dis.Nodes.Load().(*Nodes).Replicate(configs.Register, instance) //broadcast
 	return instance
 }
@@ -138,7 +140,7 @@ func (dis *Discovery) CancelSelf() {
 	dis.Nodes.Load().(*Nodes).Replicate(configs.Cancel, instance) //broadcast
 }
 
-// update discovery nodes list
+// 定时更新 discovery nodes list ；  被动通知更新（TODO）
 func (dis *Discovery) nodesPerception() {
 	var lastTimestamp int64
 	ticker := time.NewTicker(configs.NodePerceptionInterval)

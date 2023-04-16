@@ -34,15 +34,15 @@ func NewLRU(maxEntries int, idleTimeout time.Duration) *LRU {
 func (lru *LRU) Add(addr string) {
 	lru.lock.RLock()
 	defer lru.lock.RUnlock()
-	// 如果元素已经存在，直接移到活跃链表头部并更新最后使用时间
+	// 如果元素已经存在,直接移到活跃链表头部并更新最后使用时间
 	if node, ok := lru.addrMap[addr]; ok {
 		lru.activeList.MoveToFront(node)
 		lru.lastUsedTime[addr] = time.Now()
 		return
 	}
 
-	// 如果元素不存在，将其加入不活跃链表尾部并更新最后使用时间
-	node := lru.inactiveList.PushBack(addr)
+	// 如果元素不存在，将其加入不活跃链表头部并更新最后使用时间
+	node := lru.inactiveList.PushFront(addr)
 	lru.addrMap[addr] = node
 	lru.lastUsedTime[addr] = time.Now()
 
@@ -107,16 +107,15 @@ func (lru *LRU) RunIdleCheck(idleTimeout time.Duration) {
 		case <-ticker.C:
 			current := time.Now()
 			lru.lock.RLock()
-
+			element := lru.activeList.Back()
 			// 遍历 activeList，将超时未使用的节点移到 inactiveList
-			for element := lru.activeList.Back(); element != nil; {
+			for element != nil {
 				addr := element.Value.(string)
 				lastUsedTime := lru.lastUsedTime[addr]
 				if current.Sub(lastUsedTime) > idleTimeout {
 					// 将节点移到 inactiveList
 					next := element.Prev()
 					lru.activeList.Remove(element)
-					delete(lru.addrMap, addr)
 					lru.inactiveList.PushFront(addr)
 					element = next
 				} else {
@@ -124,19 +123,20 @@ func (lru *LRU) RunIdleCheck(idleTimeout time.Duration) {
 					element = element.Prev()
 				}
 			}
-
+			element = lru.inactiveList.Back()
 			// 遍历 inactiveList，将超时未使用的节点通知缩容并删除节点
-			for element := lru.inactiveList.Back(); element != nil; {
+			for element != nil {
 				addr := element.Value.(string)
 				lastUsedTime := lru.lastUsedTime[addr]
 				if current.Sub(lastUsedTime) > idleTimeout {
-					// 缩容
-					go lru.Pools.connPools[addr].shrink()
+					// 通知缩容
+					lru.Pools.connPools[addr].keepAliveChan <- struct{}{}
 					delete(lru.lastUsedTime, addr)
 
 					// 删除当前节点并获取下一个节点,防止重复缩容
 					next := element.Prev()
 					lru.inactiveList.Remove(element)
+					delete(lru.addrMap, addr)
 					element = next
 				} else {
 					// 继续遍历 inactiveList

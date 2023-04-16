@@ -14,7 +14,7 @@ import (
 
 // 连接池参数选择
 type ConnOption struct {
-	DisableKeepAlives   bool          //是否开启长连接
+	DisableKeepAlives   bool          //是否开启长连接 用于轮询等等
 	MaxIdleConns        int           //最大连接数
 	MaxIdleConnsPerHost int           //每个host可以发出的最大连接个数
 	Timeout             time.Duration //超时时间
@@ -74,8 +74,7 @@ func (r *Registry) Register(instance *Instance, latestTimestamp int64) (*Applica
 	return app, nil
 }
 
-// renew
-// 客户端上报，设 TTL
+// Renew 客户端上报，设 TTL
 func (r *Registry) Renew(env, AppID, hostname string) (*Instance, *errcode.Error) {
 	//find app
 	app, ok := r.getApplication(AppID, env)
@@ -159,7 +158,8 @@ func (r *Registry) evictTask() {
 			r.gd.storeLastCount()
 			r.evict()
 		case <-resetTicker:
-			log.Println("### registry reset task every 15m ###")
+			//那么续约时间超过阈值（默认90 秒）忽略不会剔除。但如果续约时间超过最大阈值（默认3600 秒），那么不管是否开启保护都要剔除。
+			log.Println("### registry reset task every 15min ###")
 			var count int64
 			for _, app := range r.getAllApplications() {
 				count += int64(app.GetInstanceLen())
@@ -169,7 +169,7 @@ func (r *Registry) evictTask() {
 	}
 }
 
-// evict expired instance
+// 删除过期实例
 func (r *Registry) evict() {
 	now := time.Now().UnixNano()
 	var expiredInstances []*Instance
@@ -181,14 +181,15 @@ func (r *Registry) evict() {
 		allInstances := app.GetAllInstances()
 		for _, instance := range allInstances {
 			delta := now - instance.RenewTimestamp
+			//实例过期时间超过阈值，且不在保护期内，或者超过最大阈值，那么剔除
 			if !protectStatus && delta > int64(configs.InstanceExpireDuration) ||
 				delta > int64(configs.InstanceMaxExpireDuration) {
 				expiredInstances = append(expiredInstances, instance)
 			}
 		}
 	}
-	//Considering the factors of GC and local time drift, an upper limit evictionLimit is set for eviction.
-	//When the eviction expires, the "Knuth-Shuffle" algorithm is used to achieve random eviction
+	//考虑到GC因素，设置一个上限evictionLimit进行驱逐。
+	//驱逐到期时，使用“Knuth-Shuffle”算法实现随机驱逐
 	evictionLimit := registryLen - int(float64(registryLen)*configs.SelfProtectThreshold)
 	expiredLen := len(expiredInstances)
 	if expiredLen > evictionLimit {
@@ -203,9 +204,8 @@ func (r *Registry) evict() {
 		expiredInstance := expiredInstances[i]
 		r.Cancel(expiredInstance.Env, expiredInstance.AppID, expiredInstance.Hostname, now)
 		//取消广播
-		//global.Discovery.Nodes.Load().(*Nodes).Replicate(configs.Cancel, expiredInstance)
+		// global.Discovery.Nodes.Load().(*Nodes).Replicate(configs.Cancel, expiredInstance)
 		log.Printf("### evict instance (%v, %v,%v)###\n", expiredInstance.Env, expiredInstance.AppID, expiredInstance.Hostname)
-
 	}
 }
 
@@ -234,7 +234,7 @@ func (r *Registry) FetchInstanceInfo(zone, env, AppID string, latestTime int64, 
 	return
 }
 
-// Polls hangs request and then write instances when that has changes, or return NotModified.
+// 轮询挂起请求，然后在有更改时写入实例，或者返回 NotModified。
 func (r *Registry) Polls(c context.Context, arg *ArgPolls, connOption *ConnOption) (ch chan map[string]*InstanceInfo, new bool, err error) {
 	var (
 		ins = make(map[string]*InstanceInfo, len(arg.AppID))
@@ -259,6 +259,7 @@ func (r *Registry) Polls(c context.Context, arg *ArgPolls, connOption *ConnOptio
 		ch <- ins
 		return
 	}
+	// err = errors.NotModified  如果没有变更则timeout秒后返回304
 	r.cLock.Lock()
 	for i := range arg.AppID {
 		k := pollKey(arg.Env, arg.AppID[i])
@@ -268,23 +269,25 @@ func (r *Registry) Polls(c context.Context, arg *ArgPolls, connOption *ConnOptio
 		connection, ok := r.conns[k][arg.Hostname]
 		if !ok {
 			if ch == nil {
-				ch = make(chan map[string]*InstanceInfo, 5) // NOTE: there maybe have more than one connection on the same hostname!!!
+				ch = make(chan map[string]*InstanceInfo, 5) // 注意：同一hostname上可能有多个连接！！！
 			}
 			connection = newConn(ch, arg.LatestTimestamp[i], arg, connOption)
 			log.Println("Polls from(%s) new connection(%d)", arg.Hostname, connection.count)
 		} else {
-			connection.count++ // NOTE: there maybe have more than one connection on the same hostname!!!
+			connection.count++ // 注意：同一hostname上可能有多个连接！！！
 			// 超过数量限制
 			if connection.count > connOption.MaxIdleConns {
 				r.connQueue.pushBack(connection)
 
 				over := make(chan struct{})
+				// connection 入队后，启动一个 goroutine 监听 connection.wait，在后台更新连接。
 				go func(connection *conn) {
 					for {
 						if r.connQueue.headPos != 0 {
 							r.connQueue.popFront()
 						}
 						select {
+						// 执行popFront()时将从队列中删除连接，wait<- struct{}{}，从而 goroutine 退出。
 						case <-connection.wait:
 							over <- struct{}{}
 							return
@@ -301,7 +304,7 @@ func (r *Registry) Polls(c context.Context, arg *ArgPolls, connOption *ConnOptio
 				select {
 				case <-over:
 				}
-
+				// 主要是保证对应的连接数量不超过限制
 			}
 
 			if ch == nil {

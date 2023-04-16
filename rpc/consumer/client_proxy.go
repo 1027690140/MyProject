@@ -5,14 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
+	lb "rpc_service/dispatcher/loadbalance"
 	"rpc_service/global"
 	"rpc_service/naming"
 	queue "rpc_service/util"
 	uid "rpc_service/util/uniqueId"
-	"sync/atomic"
-
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -22,10 +23,10 @@ type ClientProxy interface {
 	Call(context.Context, string, interface{}, ...interface{}) (interface{}, error)
 }
 
-// 代理客户端，完成连接调用，实现长连接管理、超时、重试、失败策略、鉴权(TODO)....
+// RPCClientProxy 代理客户端，完成连接调用，实现长连接管理、超时、重试、失败策略、鉴权(TODO)....
 type RPCClientProxy struct {
-	failMode          FailMode
 	ClientOption      ClientOption
+	failMode          FailMode
 	registry          naming.Registry
 	mutex             sync.RWMutex
 	loadBalance       LoadBalance
@@ -38,7 +39,7 @@ type RPCClientProxy struct {
 	requestGroup singleflight.Group
 }
 
-// if new a httpclient new add address params
+// NewClientProxy if new a httpclient new add address params
 func NewClientProxy(appId string, ClientOption ClientOption, registry naming.Registry, choice interface{}, addr string) ClientProxy {
 	cp := &RPCClientProxy{
 		ClientOption: ClientOption,
@@ -117,12 +118,14 @@ func (cp *RPCClientProxy) Call(ctx context.Context, servicePath string, stub int
 		for retries > 0 {
 			retries--
 			if cp.client != nil {
+
 				rs, err := cp.client.Invoke(ctx, service, stub, params...)
 				//err == global.paramErr
 				if err == nil || err == global.ParamErr {
 					return rs, nil
 				}
 			}
+			// 重试失败，切换server  getTcpConn 内置了负载均衡，自动切换server adrr
 			err = cp.getTcpConn()
 			log.Println("--failover new server--", cp.client.GetAddr())
 		}
@@ -207,11 +210,22 @@ func (cp *RPCClientProxy) Call(ctx context.Context, servicePath string, stub int
 
 // TCP
 func (cp *RPCClientProxy) getTcpConn() error {
-	s, err := cp.loadBalance.Get()
+
+	var s string
+	var err error
+
+	//负载均衡 如果是一致性哈希，需要传入key
+	if cp.ClientOption.LoadBalanceMode == 4 {
+		s = cp.loadBalance.(*lb.HashBalancer).GetByKey(cp.servers[rand.Int()])
+	} else {
+		s, err = cp.loadBalance.Get()
+	}
+
+	addr := strings.Replace(s, cp.ClientOption.NetProtocol+"://", "", -1)
+
 	if err == nil {
 		fmt.Errorf("get balancer fail")
 	}
-	addr := strings.Replace(s, cp.ClientOption.NetProtocol+"://", "", -1)
 	err = cp.client.Connect(addr) //长连接管理
 	if err != nil {
 		log.Println("connect server fail:", err)
