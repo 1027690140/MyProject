@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"rpc_service/global"
 	queue "rpc_service/util"
 	"sync"
 	"sync/atomic"
@@ -28,10 +29,10 @@ type FailBackPamars struct {
 	service        *Service
 	stub           interface{}
 	params         []interface{}
-	failBackFail   chan error       // 异步执行成功,存放结果
-	failBackID     chan int         // 任务ID
-	failBackSucess chan interface{} // 异步执行失败
-	isTimeOut      bool             // 判断任务是否超时
+	failBackFail   chan *global.StatusError // 异步执行成功,存放结果
+	failBackID     chan int                 // 任务ID
+	failBackSucess chan interface{}         // 异步执行失败
+	isTimeOut      bool                     // 判断任务是否超时
 }
 
 // NewFailBackPamars 保存参数
@@ -43,7 +44,7 @@ func NewFailBackPamars(ctx context.Context, cp *RPCClientProxy, id int, service 
 		service:        service,
 		stub:           stub,
 		params:         params,
-		failBackFail:   make(chan error, 1),
+		failBackFail:   make(chan *global.StatusError, 1),
 		failBackID:     make(chan int, 1),
 		failBackSucess: make(chan interface{}, 1),
 		isTimeOut:      false,
@@ -65,6 +66,7 @@ func init() {
 		list: queue.NewQueue(),
 		size: 0,
 	}
+
 }
 
 // SyncFailBcak 异步执行失败队列    Failback  策略

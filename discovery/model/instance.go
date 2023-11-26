@@ -13,9 +13,10 @@ type Instance struct {
 	Addrs    []string          `json:"addrs"`
 	Version  string            `json:"version"`
 	Zone     string            `json:"zone"`
+	Region   string            `json:"region"`
+	Labels   []string          `json:"labels"`
 	Metadata map[string]string `json:"metadata"`
-
-	Status uint32 `json:"status"`
+	Status   uint32            `json:"status"`
 	// timestamp
 	RegTimestamp    int64 `json:"reg_timestamp"`
 	UpTimestamp     int64 `json:"up_timestamp"`

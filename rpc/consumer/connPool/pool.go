@@ -241,6 +241,7 @@ func (p *ConnectionPool) indexGet() int {
 	ctx, cancel := context.WithTimeout(context.Background(), p.indexFreq)
 
 	defer close(indexRes)
+	//先cancel，再close
 	defer cancel()
 
 	for i := 0; i < p.poolNum; i++ {

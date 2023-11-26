@@ -30,8 +30,10 @@ type ServerOption struct {
 	Ip                string
 	Port              int
 	Hostname          string
-	AppId             string
+	AppID             string
 	Env               string
+	Zone              string
+	Region            string
 	NetProtocol       string
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -39,6 +41,7 @@ type ServerOption struct {
 	ConnectionTimeout time.Duration
 	SerializeType     protocol.SerializeType
 	CompressType      protocol.CompressType
+	AuthConfig        AuthConfig //存储认证相关的配置信息
 }
 
 var DefaultServerOption = ServerOption{
@@ -60,6 +63,7 @@ type RPCServer struct {
 	ServerOption ServerOption       //
 	Plugins      PluginContainer    //
 	serviceMap   sync.Map           // record method calls
+	authService  AuthService        //存储认证服务的实例
 }
 
 // NewRPCServer
@@ -77,11 +81,13 @@ func NewRPCServer(ServerOption ServerOption, registry naming.Registry) *RPCServe
 		ServerOption.HandleTimeout = DefaultServerOption.HandleTimeout
 	}
 
+	authService := NewAuthService(ServerOption.AuthConfig) // 使用认证配置信息初始化认证服务
 	return &RPCServer{
 		listener:     NewRPCListener(ServerOption),
 		registry:     registry,
 		ServerOption: ServerOption,
 		Plugins:      &pluginContainer{},
+		authService:  authService,
 	}
 }
 
@@ -119,7 +125,7 @@ func (svr *RPCServer) Run() {
 
 // Close service
 func (svr *RPCServer) Close() {
-	log.Println("close and cancel: ", svr.ServerOption.AppId, svr.ServerOption.Hostname)
+	log.Println("close and cancel: ", svr.ServerOption.AppID, svr.ServerOption.Hostname)
 	//从服务注册中心注销
 	if svr.cancelFunc != nil {
 		svr.cancelFunc()
@@ -132,7 +138,7 @@ func (svr *RPCServer) Close() {
 
 // Shutdown   gracefully
 func (svr *RPCServer) Shutdown() {
-	log.Println("shutdown and cancel:", svr.ServerOption.AppId, svr.ServerOption.Hostname)
+	log.Println("shutdown and cancel:", svr.ServerOption.AppID, svr.ServerOption.Hostname)
 	//从服务注册中心注销
 	if svr.cancelFunc != nil {
 		svr.cancelFunc()
@@ -141,13 +147,16 @@ func (svr *RPCServer) Shutdown() {
 	if svr.listener != nil {
 		svr.listener.Shutdown()
 	}
+
 }
 
 func (svr *RPCServer) registerToNaming() error {
 	instance := &naming.Instance{
 		Env:      svr.ServerOption.Env,
-		AppId:    svr.ServerOption.AppId,
+		AppID:    svr.ServerOption.AppID,
 		Hostname: svr.ServerOption.Hostname,
+		Zone:     svr.ServerOption.Zone,
+		Region:   svr.ServerOption.Region,
 		Addrs:    svr.listener.GetAddrs(),
 	}
 	retries := maxRegisterRetry
@@ -155,7 +164,7 @@ func (svr *RPCServer) registerToNaming() error {
 		retries--
 		cancel, err := svr.registry.Register(context.Background(), instance)
 		if err == nil {
-			log.Println("register to naming server success: ", svr.ServerOption.AppId, svr.ServerOption.Hostname)
+			log.Println("register to naming server success: ", svr.ServerOption.AppID, svr.ServerOption.Hostname)
 			svr.cancelFunc = cancel
 			return nil
 		}

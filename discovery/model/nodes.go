@@ -24,10 +24,10 @@ type Zone struct {
 }
 
 type Nodes struct {
-	nodes    []*Node
-	selfAddr string
+	Nodes    []*Node
+	SelfAddr string
 	Zone     string
-	zones    map[string][]*Node
+	Zones    map[string][]*Node
 }
 
 // new nodes
@@ -38,20 +38,20 @@ func NewNodes(c *configs.GlobalConfig) *Nodes {
 		nodes = append(nodes, n)
 	}
 	return &Nodes{
-		nodes:    nodes,
-		selfAddr: c.HttpServer,
+		Nodes:    nodes,
+		SelfAddr: c.HttpServer,
 	}
 }
 
 // replicate to other nodes
 func (nodes *Nodes) Replicate(action configs.Action, instance *Instance) error {
-	fmt.Printf("################ %v #################\n", len(nodes.nodes))
-	if len(nodes.nodes) == 0 {
+	fmt.Printf("################ %v #################\n", len(nodes.Nodes))
+	if len(nodes.Nodes) == 0 {
 		return nil
 	}
-	for _, node := range nodes.nodes {
-		if node.addr != nodes.selfAddr {
-			fmt.Printf("### replicate node(%v),action(%v),hostname(%v) ###\n", node.addr, action, instance.Hostname)
+	for _, node := range nodes.Nodes {
+		if node.Addr != nodes.SelfAddr {
+			fmt.Printf("### replicate node(%v),action(%v),hostname(%v) ###\n", node.Addr, action, instance.Hostname)
 			go nodes.action(node, action, instance)
 		}
 	}
@@ -60,14 +60,14 @@ func (nodes *Nodes) Replicate(action configs.Action, instance *Instance) error {
 
 // Myself returns whether or not myself.
 func (ns *Nodes) Myself(addr string) bool {
-	return ns.selfAddr == addr
+	return ns.SelfAddr == addr
 }
 
 // UP marks status of myself node up.
 func (ns *Nodes) UP() {
-	for _, nd := range ns.nodes {
-		if ns.Myself(nd.addr) {
-			nd.status = configs.NodeStatusUp
+	for _, nd := range ns.Nodes {
+		if ns.Myself(nd.Addr) {
+			nd.Status = configs.NodeStatusUp
 		}
 	}
 }
@@ -81,16 +81,22 @@ func (nodes *Nodes) action(node *Node, action configs.Action, instance *Instance
 		go node.Renew(instance)
 	case configs.Cancel:
 		go node.Cancel(instance)
+		// case configs.Update:
+		// 	go node.Update(instance)
 	}
+}
+
+func (nodes *Nodes) Update(ins *Instance) string {
+	return nodes.Zone
 }
 
 // get all nodes
 func (nodes *Nodes) AllNodes() []*Node {
-	nodeRs := make([]*Node, 0, len(nodes.nodes))
-	for _, node := range nodes.nodes {
+	nodeRs := make([]*Node, 0, len(nodes.Nodes))
+	for _, node := range nodes.Nodes {
 		n := &Node{
-			addr:   node.addr,
-			status: node.status,
+			Addr:   node.Addr,
+			Status: node.Status,
 		}
 		nodeRs = append(nodeRs, n)
 	}
@@ -99,9 +105,9 @@ func (nodes *Nodes) AllNodes() []*Node {
 
 // set up current node
 func (nodes *Nodes) SetUp() {
-	for _, node := range nodes.nodes {
-		if node.addr == nodes.selfAddr {
-			node.status = configs.NodeStatusUp
+	for _, node := range nodes.Nodes {
+		if node.Addr == nodes.SelfAddr {
+			node.Status = configs.NodeStatusUp
 		}
 	}
 }

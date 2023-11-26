@@ -15,6 +15,7 @@ import (
 // 全局失败异步重试队列
 // 全局 List 里装重试任务队列queue  支持并发
 var gobalfailList *failList
+var gobalfailmonitorList *failList // 更新配置文件失败队列
 
 type failList struct {
 	list *queue.Queue
@@ -54,9 +55,14 @@ func init() {
 		list: queue.NewQueue(),
 		size: 0,
 	}
+
+	gobalfailmonitorList = &failList{
+		list: queue.NewQueue(),
+		size: 0,
+	}
 }
 
-// 异步执行失败队列    Failback  策略
+// call方法 异步执行失败队列    Failback  策略
 func AsyncFailBcak(list *failList) {
 	que := list.list.Remove().(*queue.Queue)
 	atomic.AddInt32(&list.size, -1) //大小减小
@@ -98,4 +104,25 @@ func AsyncFailBcak(list *failList) {
 		}()
 
 	}
+}
+
+// 动态更新重试失败队列
+func monitorRetry(list *failList) {
+	que := list.list.Remove().(*queue.Queue)
+	atomic.AddInt32(&list.size, -1) //大小减小
+	len := que.Length()
+	for i := 0; i < len; i++ {
+		c, ok := que.Remove().(*configs.GlobalConfig)
+		if !ok {
+			continue
+		}
+		d, ok := que.Remove().(*Discovery)
+		if !ok {
+			continue
+		}
+		go func() error {
+			return d.updateConfig(c)
+		}()
+	}
+
 }

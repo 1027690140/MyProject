@@ -2,6 +2,9 @@ package consumer
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
+
 	//"errors"
 	//"fmt"
 	"log"
@@ -10,15 +13,17 @@ import (
 	"rpc_service/config"
 	"rpc_service/global"
 	"rpc_service/protocol"
+	"rpc_service/provider"
+	"rpc_service/trace"
 	"time"
 )
 
 type Client interface {
 	Connect(string) error
 	//直接执行
-	Invoke(context.Context, *Service, interface{}, ...interface{}) (interface{}, error)
+	Invoke(context.Context, *Service, interface{}, ...interface{}) (interface{}, *global.StatusError)
 	//构造执行方法
-	MakeFunc(*Service, interface{})
+	MakeFunc(context.Context, *Service, interface{})
 	Close()
 	GetAddr() string
 }
@@ -35,6 +40,7 @@ type ClientOption struct {
 	NetProtocol       string //"tcp", "udp",   http or quic(todo)
 	LoadBalanceMode   LoadBalanceMode
 	ConnPool          bool //是否使用连接池
+	AuthConfig        *provider.AuthConfig
 }
 
 var DefaultClientOption = ClientOption{
@@ -49,6 +55,7 @@ var DefaultClientOption = ClientOption{
 	NetProtocol:       "tcp",
 	LoadBalanceMode:   RoundRobinBalance,
 	ConnPool:          false,
+	AuthConfig:        &provider.AuthConfig{RequireTransportSecurity: false},
 }
 
 var _ Client = new(RPCClient)
@@ -76,9 +83,9 @@ func (cli *RPCClient) Connect(addr string) error {
 }
 
 // Invoke 发起调用
-func (cli *RPCClient) Invoke(ctx context.Context, service *Service, stub interface{}, params ...interface{}) (interface{}, error) {
+func (cli *RPCClient) Invoke(ctx context.Context, service *Service, stub interface{}, params ...interface{}) (interface{}, *global.StatusError) {
 	//make func : this step can be prepared before invoke and store into cache
-	cli.MakeFunc(service, stub)
+	cli.MakeFunc(ctx, service, stub)
 	//reflect call
 	return cli.wrapCall(ctx, stub, params...)
 }
@@ -98,8 +105,11 @@ func (cli *RPCClient) GetAddr() string {
 
 // MakeFunc 通过反射生成代理函数，
 // 网络连接、请求数据序列化、网络传输、响应返回数据解析等工作都在代理函数中完成
-func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
+func (cli *RPCClient) MakeFunc(ctx context.Context, service *Service, methodPtr interface{}) {
+	traceinfo := ctx.Value("trace_info").(*trace.TraceInfo)
+
 	container := reflect.ValueOf(methodPtr).Elem() //反射获取函数元素
+
 	coder := global.Codecs[cli.ClientOption.SerializeType]
 
 	//代理函数
@@ -126,6 +136,18 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 		payload, err := coder.Encode(inArgs) //[]byte
 		if err != nil {
 			log.Printf("encode err:%v\n", err)
+			eif := &trace.ErrorInfo{
+				Message: fmt.Sprint("encode err:%v\n", err),
+			}
+			traceinfo.Error = append(traceinfo.Error, eif)
+			Event := &trace.Event{
+				Timestamp: time.Now().UnixNano(),
+				Name:      "encode err",
+				Data:      []interface{}{inArgs},
+			}
+			traceinfo.Events = append(traceinfo.Events, Event)
+			traceinfo.EditTimestamp = time.Now().UnixNano()
+			go trace.ArchiveAndPersistTraceInfo(traceinfo)
 			return errorHandler(err)
 		}
 
@@ -143,10 +165,31 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 		msg.ServiceMethod = service.Method
 		msg.ServiceAppID = service.AppId
 		msg.Payload = payload
+		//auth
+		switch {
+		case cli.ClientOption.AuthConfig.AuthType == provider.Basic:
+			authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(cli.ClientOption.AuthConfig.Username+":"+cli.ClientOption.AuthConfig.Password))
+			msg.Metadata["Authorization"] = authHeader
+		case cli.ClientOption.AuthConfig.AuthType == provider.JWT:
+			msg.Metadata["Authorization"] = "JWT:" + string(cli.ClientOption.AuthConfig.Token)
 
+		}
+		//Send request
 		err = msg.Send(cli.conn)
 		if err != nil {
 			log.Printf("send err:%v\n", err)
+			eif := &trace.ErrorInfo{
+				Message: fmt.Sprint("send err:%v\n", err),
+			}
+			traceinfo.Error = append(traceinfo.Error, eif)
+			Event := &trace.Event{
+				Timestamp: time.Now().UnixNano(),
+				Name:      "send err",
+				Data:      []interface{}{cli.conn},
+			}
+			traceinfo.Events = append(traceinfo.Events, Event)
+			traceinfo.EditTimestamp = time.Now().UnixNano()
+			go trace.ArchiveAndPersistTraceInfo(traceinfo)
 			return errorHandler(err)
 		}
 		log.Println("send success!")
@@ -166,6 +209,18 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 		err = coder.Decode(respMsg.Payload, &respDecode)
 		if err != nil {
 			log.Printf("decode err:%v\n", err)
+			eif := &trace.ErrorInfo{
+				Message: fmt.Sprint("decode err:%v\n", err),
+			}
+			traceinfo.Error = append(traceinfo.Error, eif)
+			Event := &trace.Event{
+				Timestamp: time.Now().UnixNano(),
+				Name:      "decode err",
+				Data:      []interface{}{respMsg.Payload, &respDecode},
+			}
+			traceinfo.Events = append(traceinfo.Events, Event)
+			traceinfo.EditTimestamp = time.Now().UnixNano()
+			go trace.ArchiveAndPersistTraceInfo(traceinfo)
 			return errorHandler(err)
 		}
 		log.Println("decode success!")
@@ -186,6 +241,8 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 				outArgs[i] = reflect.Zero(container.Type().Out(i))
 			}
 		}
+		traceinfo.EditTimestamp = time.Now().UnixNano()
+		go trace.ArchiveAndPersistTraceInfo(traceinfo)
 		return outArgs
 	}
 
@@ -193,17 +250,18 @@ func (cli *RPCClient) MakeFunc(service *Service, methodPtr interface{}) {
 	container.Set(reflect.MakeFunc(container.Type(), handler))
 }
 
-func (cli *RPCClient) wrapCall(ctx context.Context, stub interface{}, params ...interface{}) (interface{}, error) {
+func (cli *RPCClient) wrapCall(ctx context.Context, stub interface{}, params ...interface{}) (interface{}, *global.StatusError) {
 	f := reflect.ValueOf(stub).Elem()
 	if len(params) != f.Type().NumIn() {
-		return nil, global.ParamErr
+		//参数个数不匹配 返回错误
+		return nil, &global.StatusError{Code: global.NewError(22), Message: "the number of params is not adapted"}
 	}
 
 	in := make([]reflect.Value, len(params))
 	for idx, param := range params {
 		in[idx] = reflect.ValueOf(param)
 	}
-	//f.Call是通过反射调用函数，并传入参数in
+	// f.Call是通过反射调用函数，并传入参数in
 	result := f.Call(in)
-	return result, nil
+	return result, &global.StatusError{}
 }

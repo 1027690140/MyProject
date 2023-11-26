@@ -32,6 +32,7 @@ type Registry struct {
 	scheduler *scheduler
 
 	gd *Guard //protect
+
 }
 
 func NewRegistry(connOption *ConnOption) (r *Registry) {
@@ -355,14 +356,14 @@ func (r *Registry) Set(c context.Context, arg *ArgSet) (err error) {
 	if ok = a[0].Set(arg); !ok {
 		return
 	}
-	r.broadcast(arg.Env, arg.AppID)
+	r.Broadcast(arg.Env, arg.AppID)
 	if !ok {
 		err = errors.ParamsErr
 	}
 	return
 }
 
-func (r *Registry) broadcast(env, appid string) {
+func (r *Registry) Broadcast(env, appid string) {
 	key := pollKey(env, appid)
 	r.cLock.Lock()
 	defer r.cLock.Unlock()
@@ -377,9 +378,9 @@ func (r *Registry) broadcast(env, appid string) {
 		for i := 0; i < conn.count; i++ {
 			select {
 			case conn.instanch <- ii: // NOTE: if chan is full, means no poller.
-				log.Println("broadcast to(%s) success(%d)", conn.arg.Hostname, i+1)
+				log.Println("Broadcast to(%s) success(%d)", conn.arg.Hostname, i+1)
 			case <-time.After(time.Millisecond * 500):
-				log.Println("broadcast to(%s) failed(%d) maybe chan full", conn.arg.Hostname, i+1)
+				log.Println("Broadcast to(%s) failed(%d) maybe chan full", conn.arg.Hostname, i+1)
 			}
 		}
 	}

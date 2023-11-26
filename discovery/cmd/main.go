@@ -40,6 +40,9 @@ func main() {
 		}
 	}()
 
+	//动态监听配置文件变化
+	go model.MonitorTheConfiguration(*c, global.Discovery)
+
 	//graceful restart
 	quit := make(chan os.Signal)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)

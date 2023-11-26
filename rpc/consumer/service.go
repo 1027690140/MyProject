@@ -6,10 +6,16 @@ import (
 )
 
 type Service struct {
-	Class  string
-	Method string
-	AppId  string   // demo: User.GetUserById.15
-	Addrs  []string // demo http@10.0.0.1:2222; tcp@10.0.0.1:1111
+	Class    string
+	Method   string
+	AppId    string // demo: User.GetUserById.15
+	Zone     string
+	Region   string
+	Addrs    []string // demo http@10.0.0.1:2222; tcp@10.0.0.1:1111
+	Hostname string
+	Env      string
+	Version  string
+	Status   uint32
 }
 
 // demo: User.GetUserById
@@ -42,4 +48,8 @@ func (service *Service) SetAddr(addrs ...string) error {
 
 func (service *Service) GetAddr() ([]string, error) {
 	return service.Addrs, nil
+}
+
+func (service *Service) GetStatus() (uint32, error) {
+	return service.Status, nil
 }

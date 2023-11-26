@@ -53,10 +53,10 @@ func NewDiscovery(config *configs.GlobalConfig, connOption *ConnOption) *Discove
 func (dis *Discovery) initSync() {
 	nodes := dis.Nodes.Load().(*Nodes)
 	for _, node := range nodes.AllNodes() {
-		if node.addr == nodes.selfAddr {
+		if node.Addr == nodes.SelfAddr {
 			continue
 		}
-		uri := fmt.Sprintf("http://%s%s", node.addr, configs.FetchAllURL)
+		uri := fmt.Sprintf("http://%s%s", node.Addr, configs.FetchAllURL)
 		resp, err := httputil.HttpPost(uri, nil)
 		if err != nil {
 			fmt.Println(err)

@@ -28,29 +28,32 @@ const (
 	InstanceStatusUP = uint32(1)
 	// InstancestatusWating Intentionally shutdown for traffic
 	InstancestatusWating = uint32(1) << 1
+
+	InstanceStatusDown    = uint32(1) << 2
+	InstanceStatusUnknown = uint32(1) << 3
 )
 
 // node is a special client
 type Node struct {
-	config      *Config
-	addr        string
-	status      int
-	registerURL string
-	cancelURL   string
-	renewURL    string
-	pollURL     string
-	pollsURL    string
-	zone        string
+	Config      *Config
+	Addr        string
+	Status      int
+	RegisterURL string
+	CancelURL   string
+	RenewURL    string
+	PollURL     string
+	PollsURL    string
+	Zone        string
 }
 
 func NewNode(config *configs.GlobalConfig, addr string, zonenumber string) *Node {
 	return &Node{
-		addr:        addr,
-		status:      configs.NodeStatusDown, //default set down
-		registerURL: fmt.Sprintf("http://%s%s", addr, configs.RegisterURL),
-		cancelURL:   fmt.Sprintf("http://%s%s", addr, configs.CancelURL),
-		renewURL:    fmt.Sprintf("http://%s%s", addr, configs.RenewURL),
-		zone:        zonenumber,
+		Addr:        addr,
+		Status:      configs.NodeStatusDown, //default set down
+		RegisterURL: fmt.Sprintf("http://%s%s", addr, configs.RegisterURL),
+		CancelURL:   fmt.Sprintf("http://%s%s", addr, configs.CancelURL),
+		RenewURL:    fmt.Sprintf("http://%s%s", addr, configs.RenewURL),
+		Zone:        zonenumber,
 	}
 }
 
@@ -58,27 +61,27 @@ func NewNode(config *configs.GlobalConfig, addr string, zonenumber string) *Node
 //Synchronization failure: record the failure queue, and resend failed requests to quickly repair
 
 func (node *Node) Register(instance *Instance) error {
-	return node.call(context.Background(), node.registerURL, configs.Register, instance, nil)
+	return node.call(context.Background(), node.RegisterURL, configs.Register, instance, nil)
 }
 
 func (node *Node) Cancel(instance *Instance) error {
-	return node.call(context.Background(), node.cancelURL, configs.Cancel, instance, nil)
+	return node.call(context.Background(), node.CancelURL, configs.Cancel, instance, nil)
 }
 
 func (node *Node) Renew(instance *Instance) error {
 	var res *Instance
-	err := node.call(context.Background(), node.renewURL, configs.Renew, instance, &res)
+	err := node.call(context.Background(), node.RenewURL, configs.Renew, instance, &res)
 	if err == errcode.ServerError {
-		log.Printf("node call %s ! renew error %s \n", node.renewURL, err)
-		node.status = configs.NodeStatusDown //node down
+		log.Printf("node call %s ! renew error %s \n", node.RenewURL, err)
+		node.Status = configs.NodeStatusDown //node down
 		return err
 	}
 	if err == errcode.NotFound { //register
-		log.Printf("node call %s ! renew not found, register again \n", node.renewURL)
-		return node.call(context.Background(), node.registerURL, configs.Register, instance, nil)
+		log.Printf("node call %s ! renew not found, register again \n", node.RenewURL)
+		return node.call(context.Background(), node.RegisterURL, configs.Register, instance, nil)
 	}
 	if err == errcode.Conflict && res != nil {
-		return node.call(context.Background(), node.registerURL, configs.Register, res, nil)
+		return node.call(context.Background(), node.RegisterURL, configs.Register, res, nil)
 	}
 	return err
 }

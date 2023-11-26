@@ -46,7 +46,8 @@ type PoolOptions struct {
 	minShrinkInterval time.Duration // 最小缩容间隔
 	minexpandInterval time.Duration // 最小扩容间隔
 
-	reuse bool // 是否复用连接
+	maxLRUEntries int  // 最大LRU缓存数目
+	reuse         bool // 是否复用连接
 }
 
 // DefaultPoolOptions sets a list of recommended options for good performance.
@@ -69,6 +70,8 @@ type PoolsParameter struct {
 
 	idleCheckFreq     time.Duration // 空闲连接检查频率
 	keepAliveInterval time.Duration // 保活检查时间
+
+	maxLRUEntries int // 最大LRU缓存数目
 }
 
 var DefaultParameter = &PoolsParameter{

@@ -26,9 +26,10 @@ const (
 )
 
 type Config struct {
-	Nodes []string
-	Env   string
-	Zone  string
+	Nodes  []string
+	Env    string
+	Zone   string
+	Region string
 }
 
 var _ Registry = new(Discovery)
@@ -71,10 +72,10 @@ func (dis *Discovery) Register(ctx context.Context, instance *Instance) (context
 	var err error
 	//check local cache
 	dis.mutex.Lock()
-	if _, ok := dis.registry[instance.AppId]; ok {
+	if _, ok := dis.registry[instance.AppID]; ok {
 		err = errors.New("instance duplicate register")
 	} else {
-		dis.registry[instance.AppId] = struct{}{} //register local cache
+		dis.registry[instance.AppID] = struct{}{} //register local cache
 	}
 	dis.mutex.Unlock()
 
@@ -87,7 +88,7 @@ func (dis *Discovery) Register(ctx context.Context, instance *Instance) (context
 	if err = dis.register(instance); err != nil {
 		//fail
 		dis.mutex.Lock()
-		delete(dis.registry, instance.AppId)
+		delete(dis.registry, instance.AppID)
 		dis.mutex.Unlock()
 		return cancel, err
 	}
@@ -123,7 +124,7 @@ func (dis *Discovery) register(instance *Instance) error {
 	log.Println("discovery - request register url:" + uri)
 	params := make(map[string]interface{})
 	params["env"] = dis.conf.Env
-	params["appid"] = instance.AppId
+	params["appid"] = instance.AppID
 	params["hostname"] = instance.Hostname
 	params["addrs"] = instance.Addrs
 	params["version"] = instance.Version
@@ -152,7 +153,7 @@ func (dis *Discovery) renew(instance *Instance) error {
 	log.Println("discovery - request renew url:" + uri)
 	params := make(map[string]interface{})
 	params["env"] = dis.conf.Env
-	params["appid"] = instance.AppId
+	params["appid"] = instance.AppID
 	params["hostname"] = instance.Hostname
 
 	resp, err := HttpPost(uri, params)
@@ -180,7 +181,7 @@ func (dis *Discovery) cancel(instance *Instance) error {
 	log.Println("discovery - request cancel url:" + uri)
 	params := make(map[string]interface{})
 	params["env"] = dis.conf.Env
-	params["appid"] = instance.AppId
+	params["appid"] = instance.AppID
 	params["hostname"] = instance.Hostname
 
 	resp, err := HttpPost(uri, params)
@@ -214,6 +215,8 @@ func (dis *Discovery) updateNode() {
 			log.Println("discovery - request and update node, url:" + uri)
 			params := make(map[string]interface{})
 			params["env"] = dis.conf.Env
+			params["region"] = dis.conf.Region
+
 			resp, err := HttpPost(uri, params)
 			if err != nil {
 				dis.switchNode()
@@ -237,7 +240,7 @@ func (dis *Discovery) updateNode() {
 
 			}
 			curNodes := dis.node.Load().([]string)
-			// 可以改成比较最近更新时间来判断是否更新
+			// 可以改成比较最近更新时间来判断是否更新  或 被动通知更新
 			if !compareNodes(newNodes, curNodes) {
 				dis.node.Store(newNodes)
 				log.Println("nodes list changed!", newNodes)

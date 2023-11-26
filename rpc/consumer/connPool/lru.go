@@ -48,7 +48,9 @@ func (lru *LRU) Add(addr string) {
 
 	// 如果不活跃链表元素超过了最大元素个数，缩容最久未使用的元素
 	if lru.inactiveList.Len() > lru.maxEntries {
-		lru.lruEvitChan <- struct{}{}
+		if len(lru.lruEvitChan) == 0 {
+			lru.lruEvitChan <- struct{}{}
+		}
 	}
 }
 

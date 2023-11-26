@@ -65,7 +65,7 @@ func NewPools(option *PoolsParameter, opts ...*PoolOptions) (*Pools, error) {
 			checkIdleStopChan: make(chan struct{}),
 			poolClosedChan:    make(chan struct{}),
 		},
-		LRU:               NewLRU(999999999, option.idleCheckFreq),
+		LRU:               NewLRU(option.maxLRUEntries, option.idleCheckFreq),
 		connPools:         make(map[string]*ConnectionPool),
 		activeConnsNum:    make(map[string]int),
 		idleConnsNum:      make(map[string]int),

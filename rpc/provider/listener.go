@@ -1,11 +1,15 @@
 package provider
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"rpc_service/naming"
+	"rpc_service/trace"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +38,7 @@ type RPCListener struct {
 	ServicePort  int
 	ServerOption ServerOption
 	Plugins      PluginContainer
+	AuthService  AuthService
 	Handlers     map[string]Handler
 	nl           net.Listener
 	doneChan     chan struct{} //外层控制结束通道
@@ -141,6 +146,19 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 			return
 		}
 
+		// Read authentication credentials from the client 进行用户安全认证的逻辑处理
+		credentials, err := l.readCredentials(conn)
+		if err != nil {
+			log.Printf("server authentication error: %v", err)
+			return
+		}
+		// Authenticate the client using the credentials
+		err = l.AuthService.Intercept(credentials)
+		if err != nil {
+			log.Printf("server authentication failed: %v", err)
+			return
+		}
+
 		//readtimeout
 		startTime := time.Now()
 		if l.ServerOption.ReadTimeout != 0 {
@@ -157,6 +175,35 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 		if err != nil || msg == nil {
 			log.Println("server receive error:", err) //timeout
 			return
+		}
+
+		//traceinfo
+		traceID := string(msg.Header[5])
+		traceinfo, err2 := trace.GetLatestTraceInfoFromRedis(traceID)
+		traceinfo.EditTimestamp = time.Now().Unix()
+		if err2 != nil {
+			log.Println("server get trace info error:", err2.Message)
+		}
+		//跨span调用
+		if traceinfo.ID != l.ServerOption.AppID {
+			go trace.ArchiveAndPersistTraceInfo(traceinfo)
+			traceinfo.ParentID = traceinfo.ID
+			traceinfo.ID = l.ServerOption.AppID
+			traceinfo.Annotations = append(traceinfo.Annotations, &trace.Annotation{Value: l.ServerOption.AppID, Timestamp: time.Now().Unix()})
+		}
+		traceinfo.RemoteEndpoint.Port = l.ServicePort
+		traceinfo.RemoteEndpoint.IPv6 = l.ServiceIP
+		traceinfo.RemoteEndpoint.ServiceName = msg.ServiceClass
+		traceinfo.RemoteEndpoint.Hostname = l.ServerOption.Hostname
+		traceinfo.Events = append(traceinfo.Events, &trace.Event{Name: "server run", Timestamp: time.Now().Unix(), Data: []interface{}{msg}})
+		traceinfo.ServiceMetadata = &trace.ServiceMetadata{
+			Instance: &naming.Instance{
+				Zone:     l.ServerOption.Zone,
+				Env:      l.ServerOption.Env,
+				AppID:    l.ServerOption.AppID,
+				Hostname: l.ServerOption.Hostname,
+				Addrs:    []string{fmt.Sprintf("%s:%d", l.ServiceIP, l.ServicePort)},
+			},
 		}
 
 		//decode
@@ -178,6 +225,8 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 		handler, ok := l.Handlers[msg.ServiceClass]
 		if !ok {
 			log.Println("server can not found handler error:", msg.ServiceClass)
+			traceinfo.Error = append(traceinfo.Error, &trace.ErrorInfo{Message: fmt.Sprintf("server can not found handler error: %s", msg.ServiceClass)})
+			go trace.ArchiveAndPersistTraceInfo(traceinfo)
 			return
 		}
 
@@ -185,12 +234,17 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 
 		result, err := handler.Handle(msg.ServiceMethod, inArgs)
 
+		traceinfo.Events = append(traceinfo.Events, &trace.Event{Name: fmt.Sprintf("server callmethod %s ", msg.ServiceMethod), Timestamp: time.Now().Unix(), Data: []interface{}{result, err}})
+
 		l.Plugins.AfterCallHook(msg.ServiceClass, msg.ServiceMethod, inArgs, result, err)
 
 		//encode
 		encodeRes, err := coder.Encode(result) //[]byte result + err
 		if err != nil {
 			log.Printf("server response encode err:%v\n", err)
+			traceinfo.Error = append(traceinfo.Error, &trace.ErrorInfo{Code: "encode err", Message: fmt.Sprintf("server response encode err:%v\n", err)})
+			go trace.ArchiveAndPersistTraceInfo(traceinfo)
+
 			return
 		}
 
@@ -206,10 +260,14 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 		l.Plugins.AfterWriteHook(encodeRes, err)
 		if err != nil {
 			log.Printf("server send err:%v\n", err) //timeout
+			traceinfo.Error = append(traceinfo.Error, &trace.ErrorInfo{Code: "server send err", Message: fmt.Sprintf("server send err:%v\n", err)})
+			go trace.ArchiveAndPersistTraceInfo(traceinfo)
+
 			return
 		}
 
 		log.Printf("server send result finish! total runtime: %v", time.Now().Sub(startTime).Seconds())
+		go trace.ArchiveAndPersistTraceInfo(traceinfo)
 		return
 	}
 }
@@ -230,6 +288,48 @@ func (l *RPCListener) receiveData(conn net.Conn) (*protocol.RPCMsg, error) {
 		return nil, err
 	}
 	return msg, nil
+}
+
+// 读取认证凭据
+func (l *RPCListener) readCredentials(conn net.Conn) (Credentials, error) {
+
+	// 示例：从 RPCMsg 的 Metadata 中获取 Authorization 头部
+	rpcMsg, err := l.receiveData(conn)
+	if err != nil {
+		return Credentials{}, err
+	}
+
+	authHeader := rpcMsg.Metadata["Authorization"]
+	if authHeader == "" {
+		return Credentials{}, errors.New("身份验证失败：缺少 Authorization 头部")
+	}
+
+	// 示例：解析 Authorization 头部的凭据
+	decodedCreds, err := base64.StdEncoding.DecodeString(authHeader)
+	if err != nil {
+		return Credentials{}, errors.New("身份验证失败：无效的 Authorization 头部")
+	}
+
+	// 示例：将凭据拆分为用户名和密码
+	creds := strings.SplitN(string(decodedCreds), ":", 2)
+	if len(creds) != 2 {
+		return Credentials{}, errors.New("身份验证失败：无效的 Authorization 头部")
+	}
+
+	// 构建 AuthConfig 结构体并返回
+	authConfig := AuthConfig{
+		Username: creds[0],
+		Password: creds[1],
+		// 添加其他必要字段的初始化
+	}
+
+	credentials := Credentials{
+		AuthConfig: &authConfig,
+		ExpiryTime: time.Now().Add(time.Hour), // 设置一个示例的过期时间
+		// 添加其他必要字段的初始化
+	}
+
+	return credentials, nil
 }
 
 func (l *RPCListener) sendData(conn net.Conn, payload []byte) error {

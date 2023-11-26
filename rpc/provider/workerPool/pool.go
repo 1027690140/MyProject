@@ -24,6 +24,10 @@ type Pool struct {
 	//通知关闭
 	release chan stop
 
+	clsoed int32
+
+	workerCache sync.Pool
+
 	lock sync.RWMutex
 	// 保证只关闭一次
 	once sync.Once
@@ -40,10 +44,17 @@ func NewPool(size int32, expiredDuration time.Duration) (*Pool, error) {
 		expiredDuration: expiredDuration,
 		workers:         make([]*Worker, 0),
 		release:         make(chan stop, 1),
+		workerCache: sync.Pool{
+			New: func() interface{} {
+				return &Worker{
+					task: make(chan taskFunc, 1),
+				}
+			},
+		},
 	}
 
 	go pool.monitor()
-
+	go pool.periodicallyPurge()
 	return pool, nil
 }
 
@@ -53,48 +64,6 @@ func (p *Pool) NewWorker(task taskFunc) *Worker {
 		pool: p,
 		task: make(chan taskFunc, 1),
 	}
-}
-
-// Start starts the worker to receive task.
-func (w *Worker) Start() {
-	go func() {
-		for {
-			w.pool.AddWorker(w)
-			task := <-w.task
-			if task == nil {
-				break
-			}
-			task()
-			w.pool.Done()
-		}
-	}()
-}
-
-// Stop stops the worker from receiving new task.
-func (w *Worker) Stop() {
-	w.task <- nil
-}
-
-// IsExpired checks if this worker is expired.
-func (w *Worker) IsExpired() bool {
-	return w.lastUsed.Add(w.pool.expiredDuration).Before(time.Now())
-}
-
-// SetLastUsed sets the last used time to now.
-func (w *Worker) SetLastUsed() {
-	w.lastUsed = time.Now()
-}
-
-// AddWorker adds a worker back to the pool.
-func (p *Pool) AddWorker(worker *Worker) {
-	p.lock.RLock()
-	defer p.lock.RUnlock()
-	if worker.IsExpired() {
-		worker.Stop()
-		return
-	}
-	p.workers = append(p.workers, worker)
-	worker.SetLastUsed()
 }
 
 // Done decreases the active worker count.
@@ -108,7 +77,7 @@ func (p *Pool) Submit(task taskFunc) error {
 		return fmt.Errorf("task is nil")
 	}
 
-	if len(p.release) > 0 {
+	if len(p.release) > 0 || atomic.LoadInt32(&p.clsoed) != CLOSED {
 		return fmt.Errorf("pool is closed")
 	}
 	if atomic.LoadInt32(&p.active) >= p.capacity {
@@ -149,6 +118,7 @@ func (p *Pool) Close() {
 		}
 		p.release <- stop{}
 		close(p.release)
+		p.clsoed = 1
 	})
 }
 
@@ -157,19 +127,35 @@ func (p *Pool) getWorker() *Worker {
 	// 标志变量，判断当前正在运行的worker数量是否已到达Pool的容量上限
 	waiting := false
 	// 加锁，检测队列中是否有可用worker，并进行相应操作
+
+	spawnWorker := func() {
+		if cacheWorker := p.workerCache.Get(); cacheWorker != nil {
+			w = cacheWorker.(*Worker)
+		} else {
+			w = &Worker{
+				pool: p,
+				task: make(chan taskFunc, 1),
+			}
+		}
+		w.run()
+	}
+
 	p.lock.RLock()
 	idleWorkers := p.workers
 	n := len(idleWorkers) - 1
-	// 当前队列中无可用worker
-	if n < 0 {
-		// 判断运行worker数目已达到该Pool的容量上限，置等待标志
-		waiting = p.active >= p.capacity
-
-		// 当前队列有可用worker，从队列尾部取出一个使用
-	} else {
+	// 当前队列有可用worker，从队列尾部取出一个使用
+	if n >= 0 {
 		w = idleWorkers[n]
 		idleWorkers[n] = nil
 		p.workers = idleWorkers[:n]
+
+		// 当前队列中无可用worker
+	} else if p.active < p.capacity {
+		spawnWorker()
+	} else if n < 0 {
+		// 判断运行worker数目已达到该Pool的容量上限，置等待标志
+		waiting = p.active >= p.capacity
+
 	}
 	// 检测完成，解锁
 	p.lock.RUnlock()
@@ -233,6 +219,40 @@ func (p *Pool) monitor() {
 	}
 }
 
+// 定期清理过期 Worker
+// 定期检查空闲 worker 队列中是否有已过期的 worker 并清理：因为采用了 LIFO 后进先出队列存放空闲 worker，
+// 所以该队列默认已经是按照 worker 的最后运行时间由远及近排序，可以方便地按顺序取出空闲队列中的每个 worker
+// 并判断它们的最后运行时间与当前时间之差是否超过设置的过期时长，若是，则清理掉该 goroutine，释放该 worker，
+// 并且将剩下的未过期 worker 重新分配到当前 Pool 的空闲 worker 队列中，进一步节省系统资源。
+func (p *Pool) periodicallyPurge() {
+	heartbeat := time.NewTicker(p.expiredDuration)
+	for range heartbeat.C {
+		currentTime := time.Now()
+		p.lock.Lock()
+		idleWorkers := p.workers
+		if len(idleWorkers) == 0 && atomic.LoadInt32(&p.active) == 0 && len(p.release) > 0 {
+			p.lock.Unlock()
+			return
+		}
+		n := 0
+		for i, w := range idleWorkers {
+			if currentTime.Sub(w.recycleTime) <= p.expiredDuration {
+				break
+			}
+			n = i
+			w.task <- nil
+			idleWorkers[i] = nil
+		}
+		n++
+		if n >= len(idleWorkers) {
+			p.workers = idleWorkers[:0]
+		} else {
+			p.workers = idleWorkers[n:]
+		}
+		p.lock.Unlock()
+	}
+}
+
 func (p *Pool) incRunning() {
 	atomic.AddInt32(&p.active, 1)
 }
@@ -240,15 +260,16 @@ func (p *Pool) decRunning() {
 	atomic.AddInt32(&p.active, -1)
 }
 
-func (p *Pool) putWorker(worker *Worker) {
+func (p *Pool) putWorker(worker *Worker) bool {
+	if atomic.LoadInt32(&p.clsoed) == CLOSED {
+		return false
+	}
 	p.lock.RLock()
 	defer p.lock.RUnlock()
-	if worker.isExpired() {
-		worker.stop()
-		return
-	}
+
 	p.workers = append(p.workers, worker)
 	worker.setLastUsed()
+	return true
 }
 
 // ReSize capacity

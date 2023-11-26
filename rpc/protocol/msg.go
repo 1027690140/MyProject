@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -93,6 +94,21 @@ func (msg *RPCMsg) Send(writer io.Writer) error {
 	if err != nil {
 		return err
 	}
+
+	// write metadata len :4 byte
+	err = binary.Write(writer, binary.BigEndian, uint32(len(msg.Metadata)))
+	if err != nil {
+		return err
+	}
+
+	// write metadata
+	// err = binary.Write(writer, binary.BigEndian, msg.Payload)
+	metada, _ := json.Marshal(msg.Metadata)
+	_, err = writer.Write(metada)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -148,11 +164,24 @@ func (msg *RPCMsg) Decode(r io.Reader) error {
 	//payload len
 	start = end
 	end = start + SPLIT_LEN
-	binary.BigEndian.Uint32(data[start:end]) //x+4+y, x+y+8 payloadLen
+	payloadLen := binary.BigEndian.Uint32(data[start:end]) //x+4+y, x+y+8 payloadLen
 
 	//payload
 	start = end
-	msg.Payload = data[start:]
+	end = start + +int(payloadLen)
+	msg.Payload = data[start:end]
+
+	//metadata len
+	start = end
+	end = start + SPLIT_LEN
+	binary.BigEndian.Uint32(data[start:end]) //x+4+y, x+y+8 payloadLen
+
+	//metadata
+	start = end
+	Metadata := data[start:]
+	// 把Metadata json decode 到 map[string]string
+	json.Unmarshal(Metadata, &msg.Metadata)
+
 	return nil
 }
 

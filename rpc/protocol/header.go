@@ -1,7 +1,9 @@
 package protocol
 
+import "time"
+
 const (
-	HEADER_LEN = 6
+	HEADER_LEN = 7
 )
 
 const (
@@ -77,4 +79,14 @@ func (h *Header) SetMessageID(id uint64) {
 // get message id
 func (h *Header) GetMessageID() uint64 {
 	return uint64(h[5])
+}
+
+// set message id
+func (h *Header) SetTimestamp() {
+	h[6] = byte(time.Now().Unix())
+}
+
+// get message id
+func (h *Header) GetTimestamp() uint64 {
+	return uint64(h[6])
 }
