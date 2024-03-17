@@ -99,7 +99,7 @@ func (dis *Discovery) Register(ctx context.Context, instance *Instance) (context
 		<-ch
 	})
 
-	//renew&cancel
+	//renew & cancel
 	go func() {
 		ticker := time.NewTicker(RenewInterval)
 		defer ticker.Stop()

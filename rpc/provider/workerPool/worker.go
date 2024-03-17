@@ -6,12 +6,17 @@ import "time"
 type Worker struct {
 	pool *Pool
 
-	task chan taskFunc
+	task chan taskFunc //无参函数
+
+	// 参数
+	args chan interface{}
 
 	lastUsed time.Time
 
 	recycleTime time.Time
 }
+
+// TODO:带参函数：
 
 func (w *Worker) stop() {
 	// 创建一个带缓冲区的 channel，容量与需要清空的 channel 容量一样。
@@ -45,17 +50,30 @@ func (w *Worker) SetLastUsed() {
 
 func (w *Worker) run() {
 	go func() {
-		// 循环监听任务列表，一旦有任务立马取出运行
+		// 无参 循环监听任务列表，一旦有任务立马取出运行
 		for f := range w.task {
 			if f == nil {
 				// 退出goroutine，运行worker数减一
 				w.pool.decRunning()
-				w.pool.workerCache.Put(w)
+				w.pool.putWorker(w)
 				return
 			}
 			f()
-
 			// worker回收复用
+			// w.pool.workerCache.Put(w)
+			if ok := w.pool.putWorker(w); !ok {
+				break
+			}
+		}
+
+		// 带参 循环监听任务列表，一旦有任务立马取出运行
+		for args := range w.args {
+			if args == nil {
+				w.pool.decRunning()
+				w.pool.workerCache.Put(w)
+				return
+			}
+			w.pool.poolFunc(args)
 			if ok := w.pool.putWorker(w); !ok {
 				break
 			}

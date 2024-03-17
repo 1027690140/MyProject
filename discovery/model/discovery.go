@@ -14,9 +14,8 @@ import (
 )
 
 type Discovery struct {
-	config *configs.GlobalConfig
-	client *httputil.Client
-
+	config    *configs.GlobalConfig
+	client    *httputil.Client
 	lastHost  string
 	protected bool
 	Registry  *Registry

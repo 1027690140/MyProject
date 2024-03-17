@@ -5,6 +5,11 @@ const (
 	RoundRobin
 	Weight
 	HASH
+	LeastConnection
+	LeastResponseTime
+	WeightedLeastConnections
+	WeightedResponseTime
+	Observed
 )
 
 func LoadBalanceFactory(lbType int) LoadBalance {
@@ -15,8 +20,16 @@ func LoadBalanceFactory(lbType int) LoadBalance {
 		return new(RoundRobinBalancer)
 	case Weight:
 		return new(WeightRoundRobinBalancer)
-	case HASH:
-		return NewHashBalancer()
+	case LeastConnection:
+		return NewLowConnectionBalancer()
+	case LeastResponseTime:
+		return NewLowResponseTimeBalancer()
+	case WeightedLeastConnections:
+		return NewWeightedLowConnectionBalancer()
+	case WeightedResponseTime:
+		return NewWeightedResponseTimeBalance()
+	case Observed:
+		return NewObservedBalance()
 	default:
 		return new(RoundRobinBalancer)
 	}

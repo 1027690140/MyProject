@@ -1,0 +1,17 @@
+syntax  = "proto3";
+package sensitive;
+
+option go_package = "33-grpc-pool/grpcpool/services/keywords/proto";
+
+message MatchRequest{
+    string input = 1;
+}
+
+message MatchResponse {
+    bool ok = 1;
+    string word = 2;
+}
+
+service KeyWordsMatch {
+    rpc Match(MatchRequest) returns (MatchResponse);
+}

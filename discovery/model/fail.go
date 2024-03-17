@@ -24,9 +24,9 @@ type failList struct {
 
 // Failback   失败自动恢复 策略需要的参数
 type ASyncPamars struct {
-	id     int
-	params map[string]interface{}
+	id int
 	//func Call() pamars
+	params         map[string]interface{}
 	ctx            context.Context
 	uri            string
 	action         configs.Action

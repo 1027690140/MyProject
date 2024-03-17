@@ -18,6 +18,7 @@ const (
 	WeightRoundRobinBalance
 	HashBalance
 	HashBalanceSimple
+	randomWeightedBalancer
 )
 
 type LoadBalanceChoice struct {
@@ -80,7 +81,20 @@ func LoadBalanceFactory(mode LoadBalanceMode, servers []string, choice interface
 			return lb.NewConsistentHashBanlance(lc.replicas, lc.Hash), nil
 		}
 		return nil, fmt.Errorf("expect pamars")
-
+	case randomWeightedBalancer:
+		if choice == nil {
+			return nil, fmt.Errorf("missing parameters")
+		}
+		if lc, ok := choice.(*LoadBalanceChoice); ok {
+			if lc.weight == 0 {
+				return nil, fmt.Errorf("weight cannot be 0")
+			}
+			if lc.replicas == 0 {
+				return nil, fmt.Errorf("call limit cannot be 0 调用次数限制不能为0")
+			}
+			return lb.NewRandomWeightedBalancer(servers, []int{lc.weight}, lc.replicas), nil
+		}
+		return nil, fmt.Errorf("incorrect parameter type")
 	default:
 		return lb.NewRandomBalance(servers), nil
 	}

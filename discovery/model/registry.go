@@ -237,6 +237,58 @@ func (r *Registry) FetchInstanceInfo(zone, env, AppID string, latestTime int64, 
 
 // 轮询挂起请求，然后在有更改时写入实例，或者返回 NotModified。
 func (r *Registry) Polls(c context.Context, arg *ArgPolls, connOption *ConnOption) (ch chan map[string]*InstanceInfo, new bool, err error) {
+
+	var (
+		ins = make(map[string]*InstanceInfo, len(arg.AppID))
+		in  *InstanceInfo
+	)
+	if len(arg.AppID) != len(arg.LatestTimestamp) {
+		arg.LatestTimestamp = make([]int64, len(arg.AppID))
+	}
+	for i := range arg.AppID {
+		in, err = r.FetchInstanceInfo(arg.Zone, arg.Env, arg.AppID[i], arg.LatestTimestamp[i], InstanceStatusUP)
+		if err == errors.NothingFound {
+			log.Println("Polls zone(%s) env(%s) appid(%s) error(%v)", arg.Zone, arg.Env, arg.AppID[i], err)
+			return
+		}
+		if err == nil {
+			ins[arg.AppID[i]] = in
+			new = true
+		}
+	}
+	if new {
+		ch = make(chan map[string]*InstanceInfo, 1)
+		ch <- ins
+		return
+	}
+	r.cLock.Lock()
+	for i := range arg.AppID {
+		k := pollKey(arg.Env, arg.AppID[i])
+		if _, ok := r.conns[k]; !ok {
+			r.conns[k] = make(map[string]*conn, 1)
+		}
+		connection, ok := r.conns[k][arg.Hostname]
+		if !ok {
+			if ch == nil {
+				ch = make(chan map[string]*InstanceInfo, 5)
+			}
+			connection = newConn(ch, arg.LatestTimestamp[i], arg, connOption)
+			log.Println("Polls from(%s) new connection(%d)", arg.Hostname, connection.count)
+		} else {
+			connection.count++
+			if ch == nil {
+				ch = connection.ch
+			}
+			log.Println("Polls from(%s) reuse connection(%d)", arg.Hostname, connection.count)
+		}
+		r.conns[k][arg.Hostname] = connection
+	}
+	r.cLock.Unlock()
+	return
+}
+
+// 轮询挂起请求，然后在有更改时写入实例，或者返回 NotModified。
+func (r *Registry) Polls_v2(c context.Context, arg *ArgPolls, connOption *ConnOption) (ch chan map[string]*InstanceInfo, new bool, err error) {
 	var (
 		ins = make(map[string]*InstanceInfo, len(arg.AppID))
 		in  *InstanceInfo
@@ -381,6 +433,29 @@ func (r *Registry) Broadcast(env, appid string) {
 				log.Println("Broadcast to(%s) success(%d)", conn.arg.Hostname, i+1)
 			case <-time.After(time.Millisecond * 500):
 				log.Println("Broadcast to(%s) failed(%d) maybe chan full", conn.arg.Hostname, i+1)
+			}
+		}
+	}
+}
+
+// broadcast on poll by chan.  make sure free poll before update appid latest timestamp.
+func (r *Registry) broadcast(env, appid string) {
+	key := pollKey(env, appid)
+	r.cLock.Lock()
+	defer r.cLock.Unlock()
+	conns, ok := r.conns[key]
+	if !ok {
+		return
+	}
+	delete(r.conns, key)
+	for _, conn := range conns {
+		InsInfo, _ := r.FetchInstanceInfo(conn.arg.Zone, env, appid, conn.latestTime, 0) // TODO(felix): latesttime!=0 increase
+		for i := 0; i < conn.count; i++ {
+			select {
+			case conn.ch <- map[string]*InstanceInfo{appid: InsInfo}: // NOTE: if chan is full, means no poller.
+				log.Println("broadcast to(%s) success(%d)", conn.arg.Hostname, i+1)
+			case <-time.After(time.Millisecond * 500):
+				log.Println("broadcast to(%s) failed(%d) maybe chan full", conn.arg.Hostname, i+1)
 			}
 		}
 	}

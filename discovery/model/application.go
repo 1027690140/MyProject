@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Apps app distinguished by zone
+// Apps app distinguished by zone\region   存一个zone\region里面的Application
 type Apps struct {
 	apps            map[string]*Application
 	lock            sync.RWMutex
@@ -23,6 +23,7 @@ func NewApps() *Apps {
 	}
 }
 
+// 应用级
 type Application struct {
 	AppID           string
 	instances       map[string]*Instance

@@ -56,14 +56,14 @@ var DefaultServerOption = ServerOption{
 
 // TCP Server
 type RPCServer struct {
-	engine       *Engine            // use for http router
+	engine       *Engine            // use for http router 自定义路由
 	listener     Listener           // Used to bind the service instance.
 	registry     naming.Registry    // Used to bind the service registry instance.
 	cancelFunc   context.CancelFunc // Used to cancel the service registry.
+	serviceMap   sync.Map           // record method calls
+	authService  AuthService        // 存储认证服务的实例
 	ServerOption ServerOption       //
 	Plugins      PluginContainer    //
-	serviceMap   sync.Map           // record method calls
-	authService  AuthService        //存储认证服务的实例
 }
 
 // NewRPCServer

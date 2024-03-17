@@ -1,3 +1,4 @@
+// 参考 借鉴
 package workerpool
 
 import (
@@ -10,13 +11,13 @@ import (
 )
 
 const (
-	// DEFAULT_ANTS_POOL_SIZE is the default capacity for a default goroutine pool.
-	DEFAULT_ANTS_POOL_SIZE = math.MaxInt32
+	// 默认容量。
+	DEFAULT_POOL_SIZE = math.MaxInt32
 
-	// DEFAULT_CLEAN_INTERVAL_TIME is the interval time to clean up goroutines.
+	// 清理 goroutine 的间隔时间。
 	DEFAULT_CLEAN_INTERVAL_TIME = 1
 
-	// CLOSED represents that the pool is closed.
+	// 表示池已关闭。
 	CLOSED = 1
 )
 
@@ -47,60 +48,56 @@ var (
 		return 1
 	}()
 
-	defaultAntsPool, _ = NewPool(DEFAULT_ANTS_POOL_SIZE, (DEFAULT_CLEAN_INTERVAL_TIME * time.Second))
+	defaultPool, _ = NewPool(DEFAULT_POOL_SIZE, (DEFAULT_CLEAN_INTERVAL_TIME * time.Second))
 )
 
-// PoolWithFunc accept the tasks from client, it limits the total of goroutines to a given number by recycling goroutines.
+// 特定func的pool
 type PoolWithFunc struct {
-	// capacity of the pool.
+	// 池容量
 	capacity int32
 
-	// running is the number of the currently running goroutines.
+	//前正在运行的 goroutine 的数量
 	running int32
 
-	// expiryDuration set the expired time (second) of every worker.
+	// 过期时间（秒）
 	expiryDuration time.Duration
 
-	// workers is a slice that store the available workers.
 	workers []*WorkerWithFunc
 
-	// release is used to notice the pool to closed itself.
+	// release 用于通知池自行关闭
 	release int32
 
-	// lock for synchronous operation.
 	lock sync.Mutex
 
-	// cond for waiting to get a idle worker.
+	// cond 用于等待获得空闲的worker
 	cond *sync.Cond
 
-	// poolFunc is the function for processing tasks.
+	// poolFunc是处理任务的函数
 	poolFunc func(interface{})
 
-	// once makes sure releasing this pool will just be done for one time.
+	// 一旦确保释放该池只会完成一次
 	once sync.Once
 
-	// workerCache speeds up the obtainment of the an usable worker in function:retrieveWorker.
+	// workerCache在函数retrieveWorker中加速了可用worker的获取
 	workerCache sync.Pool
 
-	// PanicHandler is used to handle panics from each worker goroutine.
-	// if nil, panics will be thrown out again from worker goroutines.
+	// PanicHandler 用于处理来自每个工作协程的Panic
 	PanicHandler func(interface{})
 
-	// Max number of goroutine blocking on pool.Submit.
-	// 0 (default value) means no such limit.
+	// pool.Submit 上阻塞的 Goroutine 的最大数量
 	MaxBlockingTasks int32
 
-	// goroutine already been blocked on pool.Submit
-	// protected by pool.lock
+	// goroutine 已经被阻塞在 pool.Submit 上
+	// 受 pool.lock 保护
 	blockingNum int32
 
-	// When Nonblocking is true, Pool.Submit will never be blocked.
-	// ErrPoolOverload will be returned when Pool.Submit cannot be done at once.
-	// When Nonblocking is true, MaxBlockingTasks is inoperative.
+	// 当 Nonblocking 为 true 时，Pool.Submit 永远不会被阻塞
+	// 当 Pool.Submit 无法立即完成时，将返回 ErrPoolOverload
+	// 当 Nonblocking 为 true 时，MaxBlockingTasks 不起作用
 	Nonblocking bool
 }
 
-// Clear expired workers periodically.
+// 定期清理过期Worker
 func (p *PoolWithFunc) periodicallyPurge() {
 	heartbeat := time.NewTicker(p.expiryDuration)
 	defer heartbeat.Stop()
@@ -128,35 +125,35 @@ func (p *PoolWithFunc) periodicallyPurge() {
 		}
 		p.lock.Unlock()
 
-		// Notify obsolete workers to stop.
-		// This notification must be outside the p.lock, since w.task
-		// may be blocking and may consume a lot of time if many workers
-		// are located on non-local CPUs.
+		// 通知过时的Worker停止
+		// 这个通知必须在 p.lock 之外，因为 w.task
+		// 如果有很多Worker，可能会阻塞并且可能会消耗大量时间
+		// 位于非本地 CPU 上
 		for i, w := range expiredWorkers {
 			w.args <- nil
 			expiredWorkers[i] = nil
 		}
 
-		// There might be a situation that all workers have been cleaned up(no any worker is running)
-		// while some invokers still get stuck in "p.cond.Wait()",
-		// then it ought to wakes all those invokers.
+		// 可能存在所有worker都被清理掉的情况（没有任何worker在运行）
+		// 虽然一些调用者仍然陷入“p.cond.Wait()”，
+		// 那么它应该唤醒所有这些调用者
 		if p.Running() == 0 {
 			p.cond.Broadcast()
 		}
 	}
 }
 
-// NewPoolWithFunc generates an instance of ants pool with a specific function.
+// NewPoolWithFunc 生成具有特定func 的
 func NewPoolWithFunc(size int, pf func(interface{})) (*PoolWithFunc, error) {
 	return NewUltimatePoolWithFunc(size, DEFAULT_CLEAN_INTERVAL_TIME, pf, false)
 }
 
-// NewPoolWithFuncPreMalloc generates an instance of ants pool with a specific function and the memory pre-allocation of pool size.
+// NewPoolWithFuncPreMalloc 池大小的内存预分配。
 func NewPoolWithFuncPreMalloc(size int, pf func(interface{})) (*PoolWithFunc, error) {
 	return NewUltimatePoolWithFunc(size, DEFAULT_CLEAN_INTERVAL_TIME, pf, true)
 }
 
-// NewUltimatePoolWithFunc generates an instance of ants pool with a specific function and a custom timed task.
+// NewUltimatePoolWithFunc
 func NewUltimatePoolWithFunc(size, expiry int, pf func(interface{}), preAlloc bool) (*PoolWithFunc, error) {
 	if size <= 0 {
 		return nil, ErrInvalidPoolSize
@@ -254,7 +251,7 @@ func (p *PoolWithFunc) decRunning() {
 	atomic.AddInt32(&p.running, -1)
 }
 
-// retrieveWorker returns a available worker to run the tasks.
+// retrieveWorker 返回一个可用的工作线程来运行任务
 func (p *PoolWithFunc) retrieveWorker() *WorkerWithFunc {
 	var w *WorkerWithFunc
 	spawnWorker := func() {
@@ -310,7 +307,7 @@ func (p *PoolWithFunc) retrieveWorker() *WorkerWithFunc {
 	return w
 }
 
-// revertWorker puts a worker back into free pool, recycling the goroutines.
+// revertWorker worker放回空闲池，回收 goroutine
 func (p *PoolWithFunc) revertWorker(worker *WorkerWithFunc) bool {
 	if atomic.LoadInt32(&p.release) == CLOSED {
 		return false

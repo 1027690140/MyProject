@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"service_discovery/configs"
@@ -35,6 +34,7 @@ func MonitorTheConfiguration(cig string, dis *Discovery) {
 				} else {
 					// Apply the updated configuration
 					err = dis.updateConfig(newConfig)
+					//异步重试
 					if err != nil {
 						log.Println("Failed to apply updated configuration:", err)
 						// 开启重试机制
@@ -66,7 +66,7 @@ func MonitorTheConfiguration(cig string, dis *Discovery) {
 }
 
 func loadConfig(c string) (*configs.GlobalConfig, error) {
-	configFile, err := ioutil.ReadFile(c)
+	configFile, err := os.ReadFile(c)
 	if err != nil {
 		return nil, err
 	}

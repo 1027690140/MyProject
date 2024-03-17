@@ -36,11 +36,11 @@ type Listener interface {
 type RPCListener struct {
 	ServiceIP    string
 	ServicePort  int
+	nl           net.Listener
 	ServerOption ServerOption
 	Plugins      PluginContainer
 	AuthService  AuthService
 	Handlers     map[string]Handler
-	nl           net.Listener
 	doneChan     chan struct{} //外层控制结束通道
 	handlingNum  int32         //处理中任务数
 	shutdown     int32         //关闭处理中标志位
@@ -101,7 +101,7 @@ func (l *RPCListener) acceptConn() {
 
 			if e, ok := err.(net.Error); ok && e.Temporary() { //网络发生临时错误,不退出重试
 				log.Printf("server accept network error: %v", err)
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(50 * time.Millisecond)
 				continue
 			}
 
@@ -184,7 +184,7 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 		if err2 != nil {
 			log.Println("server get trace info error:", err2.Message)
 		}
-		//跨span调用
+		//跨span调用 SPanID是一个时间段的ID ， 不是AppID
 		if traceinfo.ID != l.ServerOption.AppID {
 			go trace.ArchiveAndPersistTraceInfo(traceinfo)
 			traceinfo.ParentID = traceinfo.ID
@@ -258,6 +258,7 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 		l.Plugins.BeforeWriteHook(encodeRes)
 		err = l.sendData(conn, encodeRes)
 		l.Plugins.AfterWriteHook(encodeRes, err)
+
 		if err != nil {
 			log.Printf("server send err:%v\n", err) //timeout
 			traceinfo.Error = append(traceinfo.Error, &trace.ErrorInfo{Code: "server send err", Message: fmt.Sprintf("server send err:%v\n", err)})
@@ -267,7 +268,9 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 		}
 
 		log.Printf("server send result finish! total runtime: %v", time.Now().Sub(startTime).Seconds())
+
 		go trace.ArchiveAndPersistTraceInfo(traceinfo)
+
 		return
 	}
 }

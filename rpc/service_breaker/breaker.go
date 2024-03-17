@@ -241,7 +241,6 @@ func (breaker *ServiceBreaker) beforeCall() error {
 func (breaker *ServiceBreaker) afterCall(success bool) {
 	breaker.mu.Lock()
 	defer breaker.mu.Unlock()
-
 	if success {
 		breaker.onSuccess(time.Now())
 	} else {
@@ -294,7 +293,7 @@ func (breaker *ServiceBreaker) changeState(state State, now time.Time) {
 	}
 }
 
-// goto next time window
+// goto next time window  在初始化熔断器和熔断器状态变更的时候都会新开统计窗口  开启新的窗口批次，所有计数清零。
 func (breaker *ServiceBreaker) nextWindow(now time.Time) {
 	breaker.metrics.NewBatch()
 	breaker.metrics.OnReset() //clear count num

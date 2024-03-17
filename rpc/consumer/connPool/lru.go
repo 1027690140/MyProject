@@ -7,7 +7,7 @@ import (
 )
 
 type LRU struct {
-	lock sync.RWMutex // 锁
+	LRULock sync.RWMutex // 锁
 
 	activeList   *list.List               // 活跃链表
 	inactiveList *list.List               // 不活跃链表
@@ -16,6 +16,7 @@ type LRU struct {
 	maxEntries   int                      // 最大元素个数
 	idleTimeout  time.Duration            // 超时时间
 	lruEvitChan  chan struct{}            //更新lru
+	eviting      bool                     //正在更新lru标记
 	Pools        *Pools
 }
 
@@ -32,8 +33,8 @@ func NewLRU(maxEntries int, idleTimeout time.Duration) *LRU {
 }
 
 func (lru *LRU) Add(addr string) {
-	lru.lock.RLock()
-	defer lru.lock.RUnlock()
+	lru.LRULock.RLock()
+	defer lru.LRULock.RUnlock()
 	// 如果元素已经存在,直接移到活跃链表头部并更新最后使用时间
 	if node, ok := lru.addrMap[addr]; ok {
 		lru.activeList.MoveToFront(node)
@@ -48,7 +49,7 @@ func (lru *LRU) Add(addr string) {
 
 	// 如果不活跃链表元素超过了最大元素个数，缩容最久未使用的元素
 	if lru.inactiveList.Len() > lru.maxEntries {
-		if len(lru.lruEvitChan) == 0 {
+		if !lru.eviting && len(lru.lruEvitChan) == 0 {
 			lru.lruEvitChan <- struct{}{}
 		}
 	}
@@ -56,8 +57,8 @@ func (lru *LRU) Add(addr string) {
 
 // GetOldest 用于缩容最久未使用的元素
 func (lru *LRU) GetOldest(num int) []string {
-	lru.lock.RLock()
-	defer lru.lock.RUnlock()
+	lru.LRULock.RLock()
+	defer lru.LRULock.RUnlock()
 	res := make([]string, num)
 	for i, node := 0, lru.inactiveList.Back(); node != nil && i < num; node, i = node.Prev(), i+1 {
 		res = append(res, node.Value.(string))
@@ -71,8 +72,8 @@ func (lru *LRU) GetOldest(num int) []string {
 
 // GetNewest 用于扩容最近使用的元素
 func (lru *LRU) GetNewest(num int) []string {
-	lru.lock.RLock()
-	defer lru.lock.RUnlock()
+	lru.LRULock.RLock()
+	defer lru.LRULock.RUnlock()
 
 	res := make([]string, 0, num)
 	if lru.activeList.Len() < num {
@@ -91,8 +92,8 @@ func (lru *LRU) GetNewest(num int) []string {
 }
 
 func (lru *LRU) removeNode(node *list.Element) {
-	lru.lock.RLock()
-	defer lru.lock.RUnlock()
+	lru.LRULock.RLock()
+	defer lru.LRULock.RUnlock()
 	addr := node.Value.(string)
 	delete(lru.addrMap, addr)
 	lru.inactiveList.Remove(node)
@@ -100,15 +101,17 @@ func (lru *LRU) removeNode(node *list.Element) {
 
 // RunIdleCheck 用于定时检查不活跃链表中的元素是否超时，如果超时则通知缩容
 func (lru *LRU) RunIdleCheck(idleTimeout time.Duration) {
-	ticker := time.NewTicker(idleTimeout / 2) // 每 idleTimeout / 2 触发一次
+	ticker := time.NewTicker(2 * idleTimeout / 3) // 每 2/3 idleTimeout触发一次
 	defer ticker.Stop()
 	for {
 
 		select {
 		case <-lru.lruEvitChan:
 		case <-ticker.C:
+
+			lru.eviting = true
 			current := time.Now()
-			lru.lock.RLock()
+			lru.LRULock.RLock()
 			element := lru.activeList.Back()
 			// 遍历 activeList，将超时未使用的节点移到 inactiveList
 			for element != nil {
@@ -146,7 +149,9 @@ func (lru *LRU) RunIdleCheck(idleTimeout time.Duration) {
 				}
 			}
 
-			lru.lock.RUnlock()
+			lru.eviting = false
+
+			lru.LRULock.RUnlock()
 
 		case <-lru.Pools.poolClosedChan:
 			return

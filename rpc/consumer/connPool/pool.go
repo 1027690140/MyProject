@@ -37,35 +37,40 @@ type poolLocker struct {
 }
 
 // 记录 expander 和 shrinker 的时间 ，防止频繁扩容缩容
+// |expandReocrd - shrinkRecord|  >= limitTime
 type timeRecorder struct {
 	expandReocrd      time.Time
 	shrinkRecord      time.Time
 	minShrinkInterval time.Duration // 最小缩容间隔
 	minExpandInterval time.Duration // 最小扩容间隔
+	limitInterval     time.Duration
 }
 
+// TODO:currIdle  空闲连接数 这个属性还没用到，在缩容时候用
 // ConnectionPool 某个addr的连接池
 type ConnectionPool struct {
-	poolLocker // 锁
+	islocked   int32 //逻辑判断是否加锁
+	poolLocker       // 锁
 	poolChecker
 	*timeRecorder
 	addr        string
 	newConnFunc func(string) (net.Conn, error)
 
-	connections []chan *poolConn // 连接池 放poolConn
+	connections []chan *poolConn // 连接池 放poolConn  相当于分段保存，可以降低锁粒度
 	lastused    []time.Time      // 连接池最后使用时间，用于connections[]缩容
 
 	reuse bool // // 如果 reuse 为真且池处于 MaxActive 限制，则 Get() 重用 要返回的连接，如果 reuse 为 false 并且池处于 MaxActive 限制， 创建一个一次性连接返回。
 
 	roundRobinCounter int32 // index
 
-	minConns    int // 最小连接数
-	maxConns    int // 最大连接数
-	maxIdle     int // 最大空闲连接数
-	currConns   int // 当前连接数 = 被取出的+还在池子里的
-	poolNum     int // connections大小
-	shrinkNum   int // 缩容数目
-	connChanNum int //  []chan *poolConn 中每个chan大小
+	minConns      int // 最小连接数
+	maxConns      int // 最大连接数
+	maxIdle       int // 最大空闲连接数
+	currConns     int // 当前连接数 = 被取出的+还在池子里的
+	currIdleConns int // 可用连接数  put()时++  get()时--
+	poolNum       int // connections大小
+	shrinkNum     int // 缩容数目
+	connChanNum   int //  []chan *poolConn 中每个chan大小
 
 	timerPool *sync.Pool // 池化保存 Timer
 
@@ -380,8 +385,8 @@ func (p *ConnectionPool) Get() (net.Conn, error) {
 		return nil, ErrPoolEmpty
 	}
 
-	// 如果当前连接数小于阈值数，则扩容
-	if p.currConns < p.shrinkNum {
+	// 如果当前连接数小于阈值数 并且离上次缩容有一段时间，则扩容
+	if p.currConns < p.shrinkNum && time.Since(p.shrinkRecord) < p.limitInterval {
 		defer func() {
 			go p.expand()
 		}()
@@ -399,6 +404,7 @@ func (p *ConnectionPool) Get() (net.Conn, error) {
 			p.currConns--
 			c, _ := p.newConnFunc(p.addr)
 			//close 了一个，总数不变
+
 			return c, err
 		}
 		return conn.conn, nil
@@ -428,8 +434,14 @@ func (p *ConnectionPool) checkConn(pc *poolConn) error {
 
 // Put 将连接放回连接池
 func (p *ConnectionPool) Put(conn net.Conn) error {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	if atomic.LoadInt32(&p.islocked) == 0 {
+		p.lock.Lock()
+		defer func() {
+			p.lock.Unlock()
+			atomic.CompareAndSwapInt32(&p.islocked, 1, 0)
+		}()
+	}
+
 	if p.closed {
 		conn.Close()
 		// ErrConnectionPoolClosed
@@ -462,6 +474,7 @@ func (p *ConnectionPool) Put(conn net.Conn) error {
 	case p.connections[index] <- poolConn:
 		//更新时间
 		p.lastused[index] = poolConn.lastUsedTime
+		p.currIdleConns++
 
 	case <-timer.C:
 		// // 连接池已满，关闭连接
@@ -492,8 +505,18 @@ func (p *ConnectionPool) expand() error {
 		return ErrExpandTooMuch
 	}
 
-	p.expandingLock.Lock()
-	defer p.expandingLock.Unlock()
+	// 因为expand是在函数内部调用，有时候外部函数已经加锁,逻辑判断是否加锁
+	if atomic.LoadInt32(&p.islocked) == 0 {
+
+		if atomic.LoadInt32(&p.islocked) == 0 {
+			p.expandingLock.Lock()
+			defer func() {
+				p.expandingLock.Unlock()
+				atomic.CompareAndSwapInt32(&p.islocked, 1, 0)
+			}()
+		}
+	}
+
 	// 如果当前连接数已经达到最大连接数，则无法再扩容
 	if p.currConns == p.maxConns {
 		return errors.New("connection pool has reached max connections")
@@ -541,9 +564,16 @@ func (p *ConnectionPool) shrink() error {
 	if &p.shrinkRecord != nil && time.Since(p.shrinkRecord) < p.minShrinkInterval {
 		return ErrShrinkTooMuch
 	}
+	// shrink,逻辑判断是否加锁 	因为是在函数内部调用，有时候外部函数已经加锁,逻辑判断是否加锁
+	if atomic.LoadInt32(&p.islocked) == 0 {
+		atomic.CompareAndSwapInt32(&p.islocked, 0, 1)
+		p.shrinkingLock.Lock()
+		defer func() {
+			p.shrinkingLock.Unlock()
+			atomic.CompareAndSwapInt32(&p.islocked, 1, 0)
+		}()
+	}
 
-	p.shrinkingLock.Lock()
-	defer p.shrinkingLock.Unlock()
 	// 如果连接池已经为空，则无法再缩容
 	if len(p.connections) == 0 {
 		return errors.New("connection pool is already empty")
@@ -566,20 +596,29 @@ func (p *ConnectionPool) shrink() error {
 			})
 
 			// 关闭连接池中最旧的 numConnsToClose 个连接
-			for i := 0; i < numConnsToClose; i++ {
-
+			for numConnsToClose > 0 {
 				// 关闭
 				closeConn := p.connections[len(p.connections)-1]
-
-				for c := range closeConn {
-					conn := c
-					conn.Close()
-					p.currConns--
+				if len(closeConn) >= numConnsToClose {
+					for c := range closeConn {
+						conn := c
+						conn.Close()
+						p.currConns--
+						numConnsToClose--
+					}
+					close(closeConn)
+					// 将连接池中的连接从切片中移除
+					p.connections = p.connections[len(p.connections):]
+				} else {
+					for c := range closeConn {
+						if numConnsToClose > 0 {
+							conn := c
+							conn.Close()
+							p.currConns--
+							numConnsToClose--
+						}
+					}
 				}
-
-				close(closeConn)
-				// 将连接池中的连接从切片中移除
-				p.connections = p.connections[len(p.connections):]
 			}
 		}
 		p.shrinkRecord = time.Now()
@@ -590,8 +629,14 @@ func (p *ConnectionPool) shrink() error {
 
 // ClosePool 关闭连接池
 func (p *ConnectionPool) ClosePool() error {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+
+	if atomic.LoadInt32(&p.islocked) == 0 {
+		p.lock.Lock()
+		defer func() {
+			p.lock.Unlock()
+			atomic.CompareAndSwapInt32(&p.islocked, 1, 0)
+		}()
+	}
 
 	// 创建一个超时上下文
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -695,8 +740,13 @@ func (p *ConnectionPool) releaseConn(conn net.Conn) error {
 	if p.closed {
 		return conn.Close()
 	}
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	if atomic.LoadInt32(&p.islocked) == 0 {
+		p.lock.Lock()
+		defer func() {
+			p.lock.Unlock()
+			atomic.CompareAndSwapInt32(&p.islocked, 1, 0)
+		}()
+	}
 
 	index := p.indexPut()
 

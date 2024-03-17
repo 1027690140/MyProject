@@ -145,12 +145,13 @@ func (au *authService) Authenticate(credentials Credentials) error {
 		return ErrMissingToken
 	}
 
-	// 示例：检查用户名和密码是否有效
+	// 从配置文件检查用户名和密码是否有效
 	if credentials.AuthConfig.Username != "" && credentials.AuthConfig.Password != "" {
 		// 执行用户名和密码验证逻辑
 
 		// 如果身份验证失败，则返回错误
 		if !validUsernameAndPassword(credentials.AuthConfig) {
+			// TODO:继续从数据库验证
 			return ErrTokenExpired
 		}
 	}

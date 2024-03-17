@@ -199,7 +199,6 @@ func (st *Status) WithDetails(details ...proto.Message) error {
 		Message: st.Message,
 		Details: errDetails,
 	}
-
 	stWithDetails := status.New(codes.Code(st.Code), stErr.Error())
 	return stWithDetails.Err()
 }

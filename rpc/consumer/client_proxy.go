@@ -29,7 +29,7 @@ type ClientProxy interface {
 	Call(context.Context, string, interface{}, ...interface{}) (interface{}, error)
 }
 
-// RPCClientProxy 代理客户端，完成连接调用，实现长连接管理、超时、重试、失败策略、鉴权(TODO)....
+// RPCClientProxy 代理客户端，完成连接调用，实现长连接管理、超时、重试、失败策略、鉴权....
 type RPCClientProxy struct {
 	ClientOption      ClientOption
 	failMode          FailMode
@@ -42,8 +42,7 @@ type RPCClientProxy struct {
 	client            Client
 	httpclient        *HttpClient
 	AuthConfig        provider.AuthConfig //鉴权配置
-
-	requestGroup singleflight.Group
+	requestGroup      singleflight.Group
 }
 
 // NewClientProxy if new a httpclient new add address params
@@ -377,7 +376,7 @@ func (cp *RPCClientProxy) Call(ctx context.Context, servicePath string, stub int
 		go trace.ArchiveAndPersistTraceInfo(traceinfo)
 		traceinfo.ParentID = traceinfo.ID
 		traceinfo.ID = service.AppId
-		traceinfo.Annotations = append(traceinfo.Annotations, &trace.Annotation{Value: l.ServerOption.AppID, Timestamp: time.Now().Unix()})
+		traceinfo.Annotations = append(traceinfo.Annotations, &trace.Annotation{Value: cp.httpclient.addr, Timestamp: time.Now().Unix()})
 	}
 	eif := &trace.ErrorInfo{
 		Code:    strconv.Itoa(24),

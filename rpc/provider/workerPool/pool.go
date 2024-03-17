@@ -20,7 +20,15 @@ type Pool struct {
 	// 过期时间，即worker最大空闲时间，超过该时间则worker会被关闭
 	expiredDuration time.Duration
 
+	// 无参函数 workers
 	workers []*Worker
+
+	// 带参函数 workers
+	workersWithFunc []*WorkerWithFunc
+
+	// poolFunc是处理任务的函数
+	poolFunc func(interface{})
+
 	//通知关闭
 	release chan stop
 
@@ -42,7 +50,8 @@ func NewPool(size int32, expiredDuration time.Duration) (*Pool, error) {
 	pool := &Pool{
 		capacity:        size,
 		expiredDuration: expiredDuration,
-		workers:         make([]*Worker, 0),
+		workers:         make([]*Worker, 0, size),
+		workersWithFunc: make([]*WorkerWithFunc, 0, size),
 		release:         make(chan stop, 1),
 		workerCache: sync.Pool{
 			New: func() interface{} {

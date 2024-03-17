@@ -6,13 +6,13 @@ import (
 
 // metrics
 type Metrics struct {
-	WindowBatch        uint64
+	WindowBatch        uint64 // 窗口的批次
 	WindowTimeStart    time.Time
 	CountAll           uint64
 	CountSuccess       uint64
 	CountFail          uint64
 	ConsecutiveSuccess uint64 //连续成功数
-	ConsecutiveFail    uint64 //连续失败数
+	ConsecutiveFail    uint64 //连续失败数   成功或失败的时候对连续成功和连续失败要清零
 }
 
 func (m *Metrics) NewBatch() {

@@ -48,6 +48,7 @@ type Node struct {
 	PollURL     string `bson:"poll_url"`
 	PollsURL    string `bson:"polls_url"`
 	Zone        string `bson:"zone"`
+	Region      string `bson:"region"`
 }
 
 type NodeDocument struct {

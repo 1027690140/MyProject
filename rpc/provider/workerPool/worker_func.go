@@ -6,9 +6,8 @@ import (
 	"time"
 )
 
-// WorkerWithFunc is the actual executor who runs the tasks,
-// it starts a goroutine that accepts tasks and
-// performs function calls.
+// WorkerWithFunc 是运行任务的实际执行者，
+// 它启动一个接受任务的 goroutine 执行函数调用。
 type WorkerWithFunc struct {
 	// pool who owns this worker.
 	pool *PoolWithFunc

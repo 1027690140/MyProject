@@ -6,7 +6,7 @@
 支持 Gob 和 JSON    
 
 RPC 消息格式编码设计如下，协议消息头定义定长 6 字节（byte），依次放置魔术数（用于校验），协议版本，消息类型（区分请求/响应），压缩类型，序列化协议类型，消息 ID  每个占 1 个字节（8 个 bit）。可扩展追加  元数据 等信息用于做服务治理。
-![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1676516101926-d4a0b5f0-599e-474c-9c04-d387bcc580df.png#averageHue=%23edebe8&clientId=uf2d882b6-95ff-4&from=paste&height=140&id=u9efabf65&originHeight=175&originWidth=1075&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=17967&status=done&style=none&taskId=ufd8b8c70-1c61-4143-b72c-853dd822f83&title=&width=860)
+![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1676516101926-d4a0b5f0-599e-474c-9c04-d387bcc580df.png#averageHue=%23edebe8&clientId=uf2d882b6-95ff-4&from=paste&height=140&id=u9efabf65&name=image.png&originHeight=175&originWidth=1075&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=17967&status=done&style=none&taskId=ufd8b8c70-1c61-4143-b72c-853dd822f83&title=&width=860)
 ```go
 type Header [HEADER_LEN]byte
 
@@ -103,7 +103,7 @@ l.Plugins.BeforeWrite(encodeRes)  //Plugins
 err = l.sendData(conn, encodeRes)     
 l.Plugins.AfterWrite(encodeRes, err) //Plugins 
 ```
-![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1681297892580-4746306a-7a1c-4c9a-9708-c9105eaba648.png#averageHue=%2336504e&clientId=uc5c9d5eb-ef81-4&from=paste&height=32&id=u0aadb7b1&originHeight=40&originWidth=314&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=2045&status=done&style=none&taskId=u4f8d7276-fde5-4f15-bc6c-ad470667da8&title=&width=251.2)
+![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1681297892580-4746306a-7a1c-4c9a-9708-c9105eaba648.png#averageHue=%2336504e&clientId=uc5c9d5eb-ef81-4&from=paste&height=32&id=u0aadb7b1&name=image.png&originHeight=40&originWidth=314&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=2045&status=done&style=none&taskId=u4f8d7276-fde5-4f15-bc6c-ad470667da8&title=&width=251.2)
 改进：因为是服务启动初始化时进行所有服务注册，但是考虑动态注册、并发 Handlers可以用 Sync.Map 
 服务端与注册中心的交互包括服务启动时会将自身服务信息（监听地址和端口）写入注册中心，开启定时续约，在服务关闭退出时会注销自身的注册信息。
 
@@ -197,7 +197,7 @@ Clietn.wrapCall(ctx, methodPtr , params...)   ->  	    // 传参，执行函数
 `wrapCall()`调用 `reflect.ValueOf(stub).Elem().Call(in)`函数通过反射调用函数，并传入参数 **in**，最终获取函数执行结果并返回。
 `**reflect.ValueOf(methodPtr).Elem().Set(reflect.MakeFunc(container.Type(), handler))**`
 **在**`handler`函数中，执行发送请求，解码，读取请求操作
- ![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1681385491129-9fb711c5-4554-4551-bd67-4c31074eadae.png#averageHue=%232d4744&clientId=u953c7ccb-69a0-4&from=paste&height=127&id=u00471358&originHeight=209&originWidth=414&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=11098&status=done&style=none&taskId=u5b08261b-1ca1-465a-a3c8-48c24f69ca5&title=&width=251.20001220703125)
+ ![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1681385491129-9fb711c5-4554-4551-bd67-4c31074eadae.png#averageHue=%232d4744&clientId=u953c7ccb-69a0-4&from=paste&height=127&id=u00471358&name=image.png&originHeight=209&originWidth=414&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=11098&status=done&style=none&taskId=u5b08261b-1ca1-465a-a3c8-48c24f69ca5&title=&width=251.20001220703125)
 
 ### 失败策略  
 客户端调用实现失败策略
@@ -712,288 +712,11 @@ func (l *RPCListener) handleConn(conn net.Conn) {
 	}
 }
 ```
-### 用户认证、鉴权
-
-- 客户端提供在每一次调用注入用户凭证的能力 
-- 服务端使用拦截器来验证每一个客户端的请求 
-
-客户端RPCMsg Metadata里携带一个Authorization kv，
-有Basic、 JWT 三种方法
-例：值为Basic + 空格 + base64编码的用户名:密码 
-例如一个用户名和密码都是admin，那么header头如下 
-```go
-Authorization: Basic YWRtaW46YWRtaW4=
-```
-
-
-```go
-       // Read authentication credentials from the client 进行用户安全认证的逻辑处理
-		credentials, err := l.readCredentials(conn)
-		....
-		// Authenticate the client using the credentials
-		err = l.AuthService.Intercept(credentials)
-		
-```
-
-### 错误处理
-使用grpc，
-```go
-"google.golang.org/grpc/codes"
-"google.golang.org/grpc/status"
-```
-Status状态码 和语言 Error 的互转，，它包含code、message、details等信息，通过Status与error的互相转换，利用error来传输错误，并通过details实现拓展
-
-1.  **WithDetails** 函数，用于将自定义的错误详情添加到错误中，并返回包含错误详情的新错误。
-2. **ToStatus** 函数，用于将错误转换为 **status.Status** 对象。
-3. **ToError** 函数，用于将 **status.Status** 对象转换为错误。
-
-使用示例：
-```go
-// 创建一个错误详情
-fieldViolation := &errdetails.BadRequest_FieldViolation{
-    Field:       "ID",
-    Description: "Order ID received is not valid",
-}
-
-// 添加错误详情到错误中
-err = WithDetails(err, fieldViolation)
-```
-服务端：
-```go
-func (s *OrderManagementImpl) GetOrder(ctx context.Context, orderId *wrapperspb.StringValue) (*pb.Order, error) {
-    ord, exists := orders[orderId.Value]
-    if exists {
-        return &ord, nil
-    }
-
-    st := status.New(codes.InvalidArgument, "Order does not exist. order id: "+orderId.Value)
-    st = st.WithDetails(&epb.BadRequest_FieldViolation{
-        Field:       "ID",
-        Description: fmt.Sprintf("Order ID received is not valid"),
-    })
-
-    return nil, st.Err()
-}
-```
-客户端：
-```go
-// Get Order
-order, err := client.GetOrder(ctx, &wrapperspb.StringValue{Value: ""})
-if err != nil {
-    st := ToStatus(err)
-    if st.Code() == codes.InvalidArgument {
-        for _, d := range st.Details() {
-            switch info := d.(type) {
-                case *epb.BadRequest_FieldViolation:
-                log.Printf("Request Field Invalid: %s", info)
-                default:
-                log.Printf("Unexpected error type: %s", info)
-            }
-        }
-    } else {
-        log.Printf("Unhandled error: %s", st.String())
-    }
-
-    return
-}
-
-log.Print("GetOrder Response -> : ", order)
-```
-这样就可以在的 RPC 框架中使用改进后的错误处理功能，并实现状态和错误之间的互相转换，以及使用错误详情进行错误拓展
-此外自己定义了错误码
-
-### 链路追踪
-**TraceID生成**
-
-1. **UUID**有一个问题是不能保证单调有序，
-2. **Snowflake **有时钟回拨问题
-3. **ULID **
-- 设计为128 bit大小，与UUID兼容
-- 每毫秒生成1.21e+24个唯一的ULID（高性能）
-- 按字典顺序（字母顺序）排序
-- 标准编码为26个字符的字符串，而不是像UUID那样需要36个字符
-- 使用Crockford的base32算法来提高效率和可读性（每个字符5 bit）
-- 不区分大小写
-- 没有特殊字符串（URL安全，不需要进行二次URL编码）
-- 单调排序（正确地检测并处理相同的毫秒，所谓**单调性**，就是毫秒数相同的情况下，能够确保新的ULID随机部分的在最低有效位上加1位）
-
-综上所述，采用`**ULID**`
-
-提前生成ulid 存储到redis的 Zset 里，需要时取出一批放到`FIFOQueue`中，再进行分配。
-redis中 ulid数量低于阈值时，会自动生成一定数量的ulid存储到 redis 里。
-```go
-type FIFOQueue struct {
-	sync.Mutex
-	queue []string
-}
-```
-
-服务端对链路信息进行处理，因为客户端无法调用服务端函数，所以contex.withValue无法传递，而且链路信息需要持久化，必然会存到redis里，所以链路信息存储到redis里，由服务端、客户端共同对redis进行操作。
-消息头header里传递traceID。
-**数据埋点**
-如果这个交给业务代码来完成的话，会导致业务代码变得冗余，所以在底层框架提供数据埋点。 数据埋点主要包括四个阶段：
-
-- **Client Send**：客户端发起请求时，如果当前线程上下文已经有Trace信息，继续透传当前Trace信息，如果没有，表示一个信息的请求，生成信息的Trace信息进行传递。
-- **Server Recieve**: 服务端接收到请求时间点，此时从当前请求里获取Trace信息，并将当前信息存入线程上下文。
-- **Server Send**：服务端处理业务完成，准备返回响应时，标记业务处理完成，同时将当前Trace信息提交归档。
-- **Client Receive**：客户端接收到服务端响应时，标记服务调用完成，同时将当前Trace信息提交归档。
-
-
-**信息格式**
-> 参考Zipkin
-
-```json
-{
-  "trace_id": "<trace_id_value>",
-  "parent_id": "<parent_id_value>",
-  "id": "<id_value>",
-  "kind": "<kind_value>",
-  "name": "<name_value>",
-  "timestamp": "<timestamp_value>",
-  "duration": "<duration_value>",
-  "local_endpoint": {
-    "service_name": "<local_service_name>",
-    "ipv4": "<local_ipv4>",
-    "ipv6": "<local_ipv6>",
-    "port": <local_port>
-  },
-  "remote_endpoint": {
-    "service_name": "<remote_service_name>",
-    "ipv4": "<remote_ipv4>",
-    "ipv6": "<remote_ipv6>",
-    "port": <remote_port>
-  },
-  "annotations": [
-    {
-      "timestamp": "<annotation_timestamp_1>",
-      "value": "<annotation_value_1>"
-    },
-    {
-      "timestamp": "<annotation_timestamp_2>",
-      "value": "<annotation_value_2>"
-    },
-    {
-      "timestamp": 1647935685000,
-      "value": "start"
-    },
-    {
-      "timestamp": 1647935686000,
-      "value": "end"
-    },
-    ...
-  ],
-  "tags": {
-    "<tag_key_1>": "<tag_value_1>",
-    "<tag_key_2>": "<tag_value_2>",
-    ...
-  },
-  "debug": true,
-  "shared": false,
-  "error": {
-    "code": "<error_code>",
-    "message": "<error_message>",
-    "stack_trace": "<error_stack_trace>"
-  },
-  "events": [
-    {
-      "timestamp": "<event_timestamp_1>",
-      "name": "<event_name_1>",
-      "data": "<event_data_1>"
-    },
-    {
-      "timestamp": "<event_timestamp_2>",
-      "name": "<event_name_2>",
-      "data": "<event_data_2>"
-    },
-    ...
-  ],
-  "service_metadata": {
-    "version": "<service_version>",
-    "environment": "<deployment_environment>",
-    "instance_id": "<service_instance_id>"
-  }
-}
-
-```
-
-- **trace_id**: 字段类型为 **bytes**，表示跟踪ID，用于标识整个请求链路的唯一标识符。
-- **parent_id**: 字段类型为 **bytes**，表示父Span的ID，指示当前跨度的父跨度。
-- **id**: 字段类型为 **bytes**，表示当前Span的唯一标识符。
-- **kind**: 枚举类型，表示Span的类型，包括未指定类型、客户端、服务器、生产者和消费者等。
-- **name**: 字段类型为 **string**，表示Span的名称。
-- **timestamp**: 字段类型为 **fixed64**，表示Span的开始时间戳。
-- **duration**: 字段类型为 **uint64**，表示Span的持续时间。
-- **local_endpoint**: 表示本地端点的信息，包括服务名称、IPv4、IPv6和端口等。
-- **remote_endpoint**: 表示远程端点的信息，包括服务名称、IPv4、IPv6和端口等。
-- **annotations**: 表示Span的注解信息，包括时间戳和注解值的列表。
-- **tags**: 表示Span的标签，是一个键值对的映射，用于添加自定义的元数据信息。
-- **debug**: 字段类型为 **bool**，表示是否启用调试模式。
-- **shared**: 字段类型为 **bool**，表示是否共享Span。
-- **Error/Exception Information**: 如果在链路中发生错误或异常情况，可以记录相关的错误信息，如错误代码、错误消息、异常堆栈等。
-- **Event Tracing**: 如果系统中存在关键事件或步骤，可以通过添加事件追踪来记录这些事件的发生时间和关键信息，以便进行分析和故障排查。
-- **Service Metadata**: 可以包含服务的元数据，如服务版本、部署环境、实例ID等，以帮助标识和区分不同的服务实例。
-- **Additional Tags**: 根据需求和业务特点，可以添加其他自定义的标签，用于记录与链路相关的附加信息。例如，可以添加业务相关的标签，如订单号、用户ID等。
-- **Additional Annotations**: 可以添加更多的注释，以提供更详细的链路信息。例如，可以在关键步骤或阶段添加注释，记录特定操作的开始时间、结束时间或其他相关信息。
-- **Distributed Tracing Standards**: 参考开源的分布式跟踪标准和规范，如OpenTelemetry、OpenTracing等，了解更多可用的字段和约定。
-> 以上不少字段是保留字段，将来拓展
-
-**annotations **的** **"**value**" 字段用于存储关于链路信息的文本描述或标识。它通常包含描述事件、操作或状态的信息，以帮助理解和分析链路中发生的事情。具体存储的值可以根据具体的应用和需求进行定义，以下是一些常见的示例：
-
-1. 操作名称：记录正在执行的操作的名称，例如 "request", "response", "query" 等。
-2. 事件描述：描述链路中发生的事件或操作，例如 "start", "end", "timeout", "error" 等。
-3. 状态信息：指示链路中某个阶段或组件的状态，例如 "success", "failure", "in progress", "retry" 等。
-4. 业务标识：用于标识特定业务或操作的唯一标识符，以便进行跟踪和关联，例如订单号、用户ID等。
-5. 服务或组件名称：指示链路中涉及的服务或组件的名称，以便进行识别和定位。
-```json
-在用户认证服务中，可以记录以下链路信息：
-
-"value": "User Authentication - Start"：表示用户认证开始的事件。
-"value": "User Authentication - Success"：表示用户认证成功的事件。
-"value": "User ID: 123456"：存储用户的唯一标识符。
-
-在商品查询服务中，可以记录以下链路信息：
-
-"value": "Product Query - Start"：表示商品查询开始的事件。
-"value": "Product ID: 789"：存储查询的商品ID。
-"value": "Product Found"：表示找到了对应的商品。
-"value": "Product Name: Example Product"：存储商品的名称。
-
-在订单服务中，可以记录以下链路信息：
-
-"value": "Order Creation - Start"：表示订单创建开始的事件。
-"value": "Order Created"：表示订单成功创建的事件。
-"value": "Order ID: 987654"：存储订单的唯一标识符。
-```
-通过记录每个服务组件的操作和状态，可以在链路追踪中清晰地看到整个请求的处理过程和各个组件的输出，以便于故障排查和性能分析。
-
-通常情况下，链路追踪系统中已经记录了服务实例的相关信息，比如在`**Endpoint**`中包含了`service_name`、`ipv4`、`ipv6`和`port`等字段。这些信息可以用来标识具体的服务实例。
-在"value"字段中，主要关注记录操作和状态的信息，而不一定需要重复记录服务实例的信息。链路追踪系统可以通过其他属性来关联和展示具体的服务实例，比如根据trace_id和span_id来建立父子关系，或者根据Endpoint中的信息来进行服务实例的识别和展示。
-如果链路追踪系统已经具备了对服务实例的识别和展示能力，那么在"value"字段中主要关注与业务相关的信息即可，以减少冗余和重复记录。当需要查看特定服务实例的信息时，可以通过链路追踪系统的查询和过滤功能来获取相关的记录。
-
-发生跨Span调用时：
-
-1. 在新的Span中，trace_id会保持一致，parent_id会更新为上一个Span的id。
-2. id会生成一个新的唯一标识。
-3. annotations数组会新增新的元素，记录新Span的关键事件和状态。
-4. local_endpoint和remote_endpoint字段通常会根据实际情况更新为当前Span所属的服务实例和远程服务实例的信息。
-5. 可能会新增一些tag，用于标识新Span的特定属性或上下文信息。
-6. **将上一个Span的链路信息存储起来**，以便在新的Span中使用。这样可以保持整个链路的连贯性和完整性。
-7. SpanID 即为服务实例 Instance.AppID
-
-```java
-ctx = context.WithValue(context.Background(), "trace_info", traceinfo)
-```
-
-
-**持久化**
-调用成功、跨span调用、发生error 将链路信息持久化。
-先持久化到redis，之后达到一定量后持久化到mongodb/logstash
-相同 traceid 的 traceinfo是存到redis Zset里面 ， Zset名称为traceid， Zset score 为时间 
 # 服务注册中心：
 参考开源项目实现注册中心：
 应用级的服务发现：
 如：`UserService.user.GetUser`
-![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1681348475304-2d12c6c8-aeae-4fd9-87e5-047338c90d7b.png#averageHue=%23f8e4d5&clientId=u423711ee-6ac3-4&from=paste&height=336&id=ue263835d&originHeight=420&originWidth=898&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=87730&status=done&style=none&taskId=u39f4a850-f66c-4503-b564-b39e2fc46b6&title=&width=718.4)
+![image.png](https://cdn.nlark.com/yuque/0/2023/png/29261914/1681348475304-2d12c6c8-aeae-4fd9-87e5-047338c90d7b.png#averageHue=%23f8e4d5&clientId=u423711ee-6ac3-4&from=paste&height=336&id=ue263835d&name=image.png&originHeight=420&originWidth=898&originalType=binary&ratio=1.25&rotation=0&showTitle=false&size=87730&status=done&style=none&taskId=u39f4a850-f66c-4503-b564-b39e2fc46b6&title=&width=718.4)
 Registry 处理将所有操作复制到对等 Discovery 节点以保持同步。
 ```go
 type Discovery struct {
@@ -1111,123 +834,8 @@ _请求参数_：appid 、 env  、 hostname 、 zone ...
 2. 如果polls请求返回err，则切换node节点
 3. 如果polls返回-304 ，说明appid无变更，重新发起poll监听变更
 4. polls接口返回appid的instances列表，完成服务发现，根据需要选择不同的负载均衡算法进行节点的调度
+
 ### 
-
-#### 动态配置、增量发布与读取
-何时更新：
-
-1. 在注册中心启动时，从配置文件加载初始配置，同时开启协程监听配置文件，并在配置文件发生变化时，重新加载和应用新的配置。确保配置的更新不会中断注册中心的正常运行。
-2. 同时可以通过http请求更新配置
-
-更新方式：
-
-1. 广播通知更新信息，（当前如果有操作，操作执行完再更新）
-2. 接收到配置更新通知的节点从共享的配置存储（如数据库、配置文件、共享更新节点等）中获取最新的配置。 
-
-PS：共享更新节点：一个专门的节点集群，负责存储最新的配置信息（不断读取配置文件内容 或者 接受其他节点的更新请求 来更新）
-广播通知其他节点进行配置更新（用一个更新表，存储更新完成的节点   如果有新的更新请求到来，不用更新旧的请求）
-
-同时开启失败重试机制，放入异步队列执行重试策略
-考虑对配置进行访问控制和权限管理，以确保只有授权的用户可以修改配置。
-
-对于大多数情况下应用的配置变更都是部分文件的变更，如果全量推送会占用大量的带宽。因此采用了版本信息与配置信息独立存储的方式进行，
-版本信息 Message 中保存该版本的所有配置文件信息列表，其中配置文件信息包括配置的ID，变更状态，配置内容的校验信息（Checksum）以及配置信息的存储Key（KeyLink）。
-配置发布时 将变更的配置与最近一次发布生效的配置 merge，做到增量发布。可以根据各个配置文件的变更状态信息或者根据本地缓存对比最新的 Checksum 判断配置是否需要更新，做到读增量。
-
-1. 获取最近一次发布生效的配置：在注册中心中，获取最近一次发布生效的配置信息。
-2. 获取本地缓存的配置：读取本地缓存的配置信息，如果存在的话。
-3. 比较配置变更状态：对比最新配置与本地缓存的配置，根据配置文件的变更状态信息判断是否需要进行增量更新。
-4. 合并配置：如果需要进行增量更新，将变更的配置与最近一次发布生效的配置进行合并，生成新的配置结果。
-5. 更新本地缓存：将合并后的配置更新到本地缓存中，供下次增量更新使用。
-
-#### 缓存 & 持久化、快照\历史版本
-使用redis + MongoDB    先在redis 查询，如果不存在再在MongoDB 查
-为了最大程度保证数据完整性，redis 的AOF快照可以开启**Always **选项
-
-**Redis缓存**
-使用 Redis 的 Hash 缓存储实例的详细信息。
-
-   - 键名为 "instances:" + hostname + ":" + version。
-   - 值为包含实例详细信息的哈希表。
-
-例如，假设主机名为 "example.com"，有两个版本 "v1" 和 "v2"。那么在 Redis 中的存储结构如下：
-```yaml
-Hash: instances:example.com:v1
-- app_id: "app1"
-- env: "production"
-- zone: "us-west-1"
-- region: "us"
-- hostname: "example.com"
-- version: "v1"
-- status: "active"
-- reg_timestamp: 1620000000
-- up_timestamp: 1621000000
-- ...其他字段
-
-Hash: instances:example.com:v2
-- app_id: "app1"
-- env: "production"
-- zone: "us-west-1"
-- region: "us"
-- hostname: "example.com"
-- version: "v2"
-- status: "active"
-- reg_timestamp: 1620000000
-- up_timestamp: 1622000000
-- ...其他字段
-
-```
-这样，可以根据需要使用不同的版本号来访问特定版本的实例详细信息。要获取最新版本的实例信息，可以按照以下步骤进行：
-
-1. 使用 "instances:" + hostname 作为前缀，获取所有以该前缀开头的键。
-2. 对获取的键列表进行排序，选择最新的版本。
-3. 使用选择的最新版本的键来获取实例的详细信息。
-
-通过这种方式，在 Redis 中存储并访问每个实例的不同版本，并选择最新的版本进行操作。
-
-变更记录存在Zset里面,version 作为score
-
-- 同时定期、缓存数量达到阈值时 清理过期的缓存和状态不可用的缓存
-- 缓存 注册中心历史变更记录：记录注册中心的配置和元数据的变更历史，包括新增、修改、删除等操作，以便追踪和审计。
-- 缓存集群节点信息
-
-使用`versionCurMap` 保存当前对应版本号  ，`versionHistoryMap`保存每个版本的上一个版本号
-在redis 里 用一个list 维护 可用版本的id ， 方便回滚 ，
-
-**持久化到MongoDB**：
-例如：对应节点信息的持久化，可以根据不同的节点属性或其他分类标准将节点信息存储在不同的集合中。
-根据节点的区域（Zone）将节点信息分别存储在不同的集合collection中，或者根据节点的状态（上线、下线）将其分别存储在不同的集合中。
-这种方法可以提供更细粒度的数据管理和查询灵活性。
-```bash
-type Node struct {
-	Addr        string `bson:"addr"`
-	RegisterURL string `bson:"register_url"`
-	CancelURL   string `bson:"cancel_url"`
-	RenewURL    string `bson:"renew_url"`
-	PollURL     string `bson:"poll_url"`
-	PollsURL    string `bson:"polls_url"`
-	Zone        string `bson:"zone"`
-}
-
-type InstanceDocument struct {
-	Env             string            `bson:"env"`
-	AppID           string            `bson:"app_id"`
-	Hostname        string            `bson:"hostname"`
-	Addrs           []string          `bson:"addrs"`
-	Version         string            `bson:"version"`
-	Zone            string            `bson:"zone"`
-	Region          string            `bson:"region"`
-	Labels          []string          `bson:"labels"`
-	Metadata        map[string]string `bson:"metadata"`
-	Status          uint32            `bson:"status"`
-	RegTimestamp    int64             `bson:"reg_timestamp"`
-	UpTimestamp     int64             `bson:"up_timestamp"`
-	RenewTimestamp  int64             `bson:"renew_timestamp"`
-	DirtyTimestamp  int64             `bson:"dirty_timestamp"`
-	LatestTimestamp int64             `bson:"latest_timestamp"`
-}
-```
-
 #### 长轮询监听
  开启长连接，轮询挂起请求，然后在有更改时写入实例，或者返回 304 NotModified。
 `ConnOption` 管理超时时间，连接数
@@ -1391,6 +999,10 @@ func (r *Registry) Polls(c context.Context, arg *ArgPolls, connOption *ConnOptio
 3. 接着，加锁并遍历appid。对于每个appid，生成一个连接池的键值，并检查该连接池中是否存在当前主机名（arg.Hostname）的连接，如果不存在，则会创建一个新的连接并将其存储在连接池中；如果存在，则会增加该连接的计数器 count。
 4. 接下来，如果连接的计数器超过了最大空闲连接数，则该连接将被添加到连接队列中。然后，该方法会启动一个 goroutine 来等待连接队列的头部连接被弹出并关闭，然后该连接会被删除。在此期间，该连接仍然会被保留，但不会被分配给新的轮询请求。如果连接队列为空，则会阻塞在 connection.wait 上等待新的连接加入队列。主要是保证对应的连接数量不超过限制。
 
+缺点：主动遍历轮询
+改进：可以设置一个变更表，标记变化节点，轮询变更表 
+    可以被动更新，由变更节点发起请求(变更节点数达到一定程度或者达到时间限制)。
+    可以类似Gossip，更新部分信息
     
 #### 服务下线
 接受服务的下线请求，并将服务从注册信息列表中删除。通过传入 env, appid, hostname 三要素信息进行对应服务实例的取消。
@@ -1493,6 +1105,11 @@ type Node struct {
 
 同时通过记录失败队列，补发失败请求来快速修复。 失败队列结构和上述 Failback 失败重试队列一样。
 
+和gossip 比，缺点：
+
+- 消息冲突：由于每个节点都可以与其他任意节点通信，如果同时有多个节点发送广播消息，就可能会导致信道上出现消息冲突，从而影响消息的正确传输。
+- 消息冗余：由于每个节点都要接收所有的广播消息（gossip的谣言传播只是发送新数据），就可能会造成大量的消息冗余，浪费网络带宽和节点资源。
+- 消息延迟：由于每个节点都要处理所有的广播消息，就可能会造成消息处理的延迟，影响网络的响应速度和实时性。
 
 注册表初始化：
 节点Node首次启动时，遍历所有节点，获取注册表数据，依次注册到本地。只有当所有数据同步完毕后，该注册中心才可对外提供服务，切换为上线状态。
@@ -1523,34 +1140,4 @@ hostname: "host3"
 
 
 
-#### 集群节点的心跳检测
-结合定时任务和消息队列来实现 ：在一台机器上开启redis集群， 由Redis 存任务 ， 存节点状态信息；由kafka发送、接收消息 。  （redis使用长连接方式）
-**定时任务**
 
-1. 使用 Redis 的`Zset`来实现简单的定时任务调度。
-   1. 在 Redis 中对每个节点创建 一个zset用于存储定时任务，一个hash存状态信息。
-   2. score 存执行时间戳（以毫秒为单位的 UNIX 时间戳）
-   3. value 存对应注册中心的地址
-   4. 使用 Redis 的 `ZRANGEBYSCORE` 命令获取执行时间戳小于当前时间的任务列表。然后，根据任务的标识符执行相应的任务逻辑。一次性读取多个任务，一起交由kafka批量发送。
-   5. 每次心跳检测成功，就往zset里面存新的任务，同时更新redis里 hash 里节点的状态信息
-
-监控任务超时：定期检查任务的执行时间是否超过设定的超时阈值，如果超时，则表示任务未得到处理。可以使用 Redis 的 Sorted Set 数据结构进行范围查询（ZRANGEBYSCORE）来获取当前时间之前的任务。
-**发送消息**
-
-1. 使用kafka：
-   1. 将任务信息作为消息发布到消息队列中，并设置消息的超时时间。（发送方如果发现超过超时时间，不发送。）
-   2. 消费者节点从队列中获取心跳消息并应答。将对应的公共reids 检测集群设置状态。
-   3. 发送方未在规定时间内检测到redis对应节点信息状态变化，视为超时。
-
-**保证消息的可靠性传递：**
-
-1. 使用 Kafka 的生产者确认机制，确保消息被成功发送到 Kafka 服务器并写入主题的分区中。
-2. 使用 Kafka 的消费者提交偏移量：自动提交偏移量。控制消费的位置，确保消息被完整地处理和消费。
-
-将超时的节点下线，更新状态，记入日志，并通知其他节点。
-
-**PS：**如超时节点可能只是太过繁忙，在处理任务，不应该将它下线，因此：
-
-1. 引入任务处理状态标识：在心跳消息中附带节点的任务处理状态标识。这个标识可以是节点当前任务的状态，例如忙碌、空闲等。接收到心跳消息时，除了检查超时，还可以根据节点的任务处理状态来判断是否下线。如果繁忙，隔一段时间重试，再次重试（如：重试间隔可以是该节点平均响应时间*2）。
-2. 综合考虑多个指标：除了心跳超时，可以结合其他指标来判断节点的繁忙程度。例如，可以监控节点的负载情况，如果节点的负载很高即使没有心跳超时，也可以考虑将其标记为繁忙节点或进行其他处理。
-3. 动态调整节点状态：不仅仅根据心跳超时判断节点状态，而是综合考虑节点的工作负载、响应能力等指标，动态地调整节点的状态。
